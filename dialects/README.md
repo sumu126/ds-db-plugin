@@ -59,7 +59,12 @@ npm run build      # 打包成 lib/index.js（主包的 npm run build 也会遍�
 
 | 现象 | 原因 |
 | --- | --- |
-| `Cannot find package 'dsh-ds-db'` | 核心没被链接进来；跑 `pnpm install`（按 `workspace:*` 自动链接）。包管理器不可用时手工建：`New-Item -ItemType Junction -Path node_modules\dsh-ds-db -Target $PWD`（在插件根执行） |
+| `Cannot find package 'dsh-ds-db'` | 核心没被链接进来；跑 `pnpm install`（按 workspace 链接）。包管理器不可用时手工建**目录联接**，但注意：`New-Item -ItemType Junction -Path node_modules\dsh-ds-db -Target $PWD` 会让 `node_modules` 自我引用，**遍历文件时必须排除 `node_modules`**（git、ripgrep、编辑器默认都排除），否则会无限展开 |
 | 类型检查报 harness 源码的错 | 用了 `tsconfig.json` 而不是 `tsconfig.types.json` |
 | 工具描述里是兜底文案 | 方言注册晚于工具注册；确认方言行排在了 `ds-db` 行之前 |
 | 设置页没出现我的类型 | 页面读的是 `GET /api/ds-db/dialects`，确认方言已注册 |
+| npm 报 `Unsupported URL Type "workspace:"` | 核心对本地方言包用的是 `file:dialects/mysql`，npm 与 pnpm 都能解析；若你改成了 `workspace:^`，就只用 pnpm 安装 |
+
+## 发布时的依赖替换
+
+核心的 `dependencies` 用 `file:dialects/mysql` 指向本地方言包，**发布前必须替换成真实版本号**（`dsh-dialect-mysql@^0.1.0`），否则装包的人解析不到该路径。用 pnpm 发布时，`workspace:^` 会被自动替换，`file:` 不会。

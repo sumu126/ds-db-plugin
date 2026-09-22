@@ -41,7 +41,7 @@
     "verify:host": "node --import tsx/esm scripts/verify-host.mjs"
   },
   "dependencies": {
-    "dsh-dialect-mysql": "workspace:^"
+    "dsh-dialect-mysql": "file:dialects/mysql"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "*",
