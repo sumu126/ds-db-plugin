@@ -5,8 +5,8 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { MYSQL_DIALECT } from '../src/dialect-mysql.ts'
-import { assertReadOnlyStatement, scanStatement, type SqlLexical } from '../src/sql-guard.ts'
+import { MYSQL_DIALECT } from '../src/index.ts'
+import { assertReadOnlyStatement, scanStatement, type SqlLexical } from 'dsh-ds-db/src/sql-guard.ts'
 
 /** The rules the MySQL dialect judges by. */
 const RULES = MYSQL_DIALECT.rules

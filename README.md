@@ -9,8 +9,9 @@
 | 你 | 直接看 |
 | --- | --- |
 | 想让模型查自己的库 | [快速开始](#快速开始使用者) |
-| **想让 dsh 支持一种新的数据库** | [给方言作者：增加一种数据库类型](#给方言作者增加一种数据库类型) |
-| 想改插件本身 | [给插件开发者：本地开发](#给插件开发者本地开发) |
+| **想让 dsh 支持一种新的数据库** | [给方言作者](#给方言作者增加一种数据库类型)｜[`dialects/README.md`](dialects/README.md) |
+| 想在**本仓**加一个官方/合作方言 | [`dialects/_template/`](dialects/_template/README.md) |
+| 想改插件本身（seam、工具、设置页） | [给插件开发者](#给插件开发者本地开发) |
 
 ## 能力一览
 
@@ -29,31 +30,36 @@
 
 ## 组成
 
+核心**不含任何数据库类型**：MySQL 也是一个方言包，和第三方的形状完全一样。
+
 ```
 .
-├── package.json            # 包清单：dsh.bundle（可安装层）+ dsh.client（浏览器半边）
-├── cordis.patch.yml        # 以 bundle 安装时贡献的一层：一行 ds-db
-├── src/                    # 源码（host 半边 + browser 半边）
+├── package.json            # 根包 = 核心（dsh-ds-db）：dsh.bundle + dsh.client
+├── pnpm-workspace.yaml     # packages: ['.', 'dialects/*']
+├── cordis.patch.yml        # 以 bundle 安装时贡献两行：方言包 + 核心
+├── src/                    # 核心（host 半边 + browser 半边），不含方言
 │   ├── index.ts            # host 入口：设置命名空间、方言注册表、工具、两条 API 路由
 │   ├── contract.ts         # 两半边共享的常量与类型（不含任何 import）
 │   ├── settings.ts         # Schemastery 配置 schema + 组合默认值
-│   ├── dialect.ts          # 方言 seam：DatabaseDialect 定义 + 注册表服务
-│   ├── dialect-mysql.ts    # MySQL 方言：驱动、连接池、元数据 SQL、语法
-│   ├── dialect-catalog.ts  # 已知但尚未安装的方言包清单
+│   ├── dialect.ts          # ★ 方言 seam：DatabaseDialect 定义 + 注册表服务
+│   ├── dialect-catalog.ts  # 可安装的方言包清单与默认方言名
 │   ├── dialect-audit.ts    # ★ 方言契约自检（方言作者用）
 │   ├── connection.ts       # 方言中立的会话运行器（身份换会话、超时、截断、错误包装）
 │   ├── sql-guard.ts        # 只读语句判定（词法与禁止项由方言提供）
 │   ├── value.ts            # 无损 JSON 投影与单元格读取器
 │   ├── tools.ts            # 模型可见工具（方言中立，不含 SQL）
 │   └── client/             # 浏览器半边：设置整页、表单状态机、双语字典、CSS Modules
+├── dialects/               # ★ 数据库类型工作区
+│   ├── mysql/              #   dsh-dialect-mysql：官方方言，随主包自动安装
+│   ├── _template/          #   新方言的起手骨架（不是包）
+│   └── README.md           #   工作区说明：怎么加一个方言
 ├── examples/
-│   └── dsh-dialect-postgres/  # ★ 仓外 PostgreSQL 方言，方言作者的模板
+│   └── dsh-dialect-postgres/  # 仓外独立包的完整示例（含驱动与元数据 SQL）
 ├── docs/                   # 需求、设计、API 契约、决策记录
 ├── scripts/                # 构建与验证脚本
-├── tests/                  # 单元测试
 ├── lib/                    # 构建产物（npm run build 生成，不入库）
 ├── LICENSE                 # MIT
-└── .dev/                   # 开发用临时目录（生成的 overlay、临时 DSH_HOME）
+└── .dev/                   # 开发用临时目录（生成的 overlay）
 ```
 
 ## 快速开始（使用者）
@@ -228,15 +234,28 @@ const problems = auditDialect(YOUR_DIALECT)   // 空数组 = 通过
 
 ### 从模板开始
 
-[`examples/dsh-dialect-postgres/`](examples/dsh-dialect-postgres/) 是完整可用的 PostgreSQL 方言，直接复制改：
+两个起点，按你的去向选：
+
+| 起点 | 用于 | 特点 |
+| --- | --- | --- |
+| [`dialects/_template/`](dialects/_template/README.md) | 在**本仓**开发（官方/合作方言） | 骨架 + TODO，已在 workspace 内，导入走包名 |
+| [`examples/dsh-dialect-postgres/`](examples/dsh-dialect-postgres/) | **复制出去**建独立仓并发布 | 完整可跑的真实方言，含驱动与 `information_schema` 元数据 SQL |
 
 ```sh
-cd examples/dsh-dialect-postgres
-npm install --legacy-peer-deps
-npm run verify     # 契约审计，无需 PostgreSQL 服务
+# A. 仓内：复制骨架，改完即跑
+cp -r dialects/_template dialects/clickhouse
+cd dialects/clickhouse && npm run verify
+
+# B. 出仓：拿完整示例当底子
+cp -r examples/dsh-dialect-postgres ~/dsh-dialect-clickhouse
+cd ~/dsh-dialect-clickhouse && npm install --legacy-peer-deps && npm run verify
 ```
 
-它本身就是「能力缺失如何降级」的范例：PostgreSQL 没有内置的 `SHOW CREATE TABLE` 等价物，所以它不声明 `createStatement`。
+PostgreSQL 那份本身就是「能力缺失如何降级」的范例：它没有内置的 `SHOW CREATE TABLE` 等价物，所以不声明 `createStatement`。
+
+### 在仓内加方言要不要改核心？
+
+只有**随主包分发**时才需要，改两处：核心 `cordis.patch.yml` 加一行（**排在 `ds-db` 行之前**）、核心 `dependencies` 加该方言包。独立发布的方言，核心一行都不用动——用户自己 `dsh plugin add`。
 
 ### 常见坑
 
@@ -252,11 +271,11 @@ npm run verify     # 契约审计，无需 PostgreSQL 服务
 
 ```sh
 pnpm install --no-frozen-lockfile   # 或 npm install --legacy-peer-deps
-npm run typecheck      # tsc 类型检查（harness 依赖按其构建的 .d.ts 解析）
-npm test               # 单元测试（24 例）：只读判定 + MySQL 方言 + 方言契约审计
-npm run verify:host    # 挂真实 ToolRuntime：工具注册、描述文本、拒绝文本、能力降级
-npm run build          # host 与浏览器半边
-npm run overlay        # 生成 .dev/cordis.yml
+npm run typecheck      # 核心 + 各方言包（harness 依赖按其 .d.ts 解析）
+npm test               # 方言包的行为测试与契约审计（24 例）
+npm run verify:host    # 挂真实 ToolRuntime：方言以独立插件挂载后跑通全部断言
+npm run build          # 核心 + 浏览器半边 + 每个方言包
+npm run overlay        # 生成 .dev/cordis.yml（两行：方言包 + 核心）
 ```
 
 启动冒烟：
@@ -270,14 +289,18 @@ pnpm dsh web --patch <插件目录>/.dev/cordis.yml
 
 改动落在哪一层：
 
-- 加数据库类型 → **不要改本仓库**，发方言包
-- 加工具 → `src/tools.ts`；若需要方言提供底层查询，先加能力键再在方言里实现
-- 改设置页 → `src/client/`（改完必须 `npm run build`）
-- 改组合/配置 → `src/settings.ts` + `src/contract.ts`
+| 想做什么 | 改哪 |
+| --- | --- |
+| 加数据库类型（第三方） | **不要改本仓库**，复制模板出去发包 |
+| 加数据库类型（官方/随主包分发） | `dialects/<name>/` + 核心 `cordis.patch.yml`、`dependencies` 各一行 |
+| 加工具 | `src/tools.ts`；若需要方言提供底层查询，先在 `DialectCapability` 加能力键，再在方言里实现 |
+| 改设置页 | `src/client/`（改完必须 `npm run build`） |
+| 改方言 seam 本身 | `src/dialect.ts`（`DatabaseDialect`、注册表、`DialectFacts`） |
+| 改组合/配置 | `src/settings.ts` + `src/contract.ts` |
 
 ## 已知限制 / 暂未实现
 
-- **内置方言只有 MySQL**：PostgreSQL 以仓外示例包形式提供（`examples/`），Oracle 未实现。加 PostgreSQL 便宜；加 Oracle 贵（无 `LIMIT`、无 `information_schema`、SID 与 service name 两种连法、`oracledb` 是重量级原生依赖），建议单独评估
+- **随主包分发的方言只有 `dsh-dialect-mysql`**：它和第三方方言形状完全一致，只是被核心的 bundle 层与 `dependencies` 一起带上。PostgreSQL 以仓外示例包形式提供（`examples/`），Oracle 未实现——加 PostgreSQL 便宜，加 Oracle 贵（无 `LIMIT`、无 `information_schema`、SID 与 service name 两种连法、`oracledb` 是重量级原生依赖）
 - **打包版 dsh 上的 `dsh plugin add` 安装实测未完成**：声明已补齐，缺真实打包环境验证
 - **配置字段是「通用字段 + `extra`」**：Oracle 这类需要 service name 的库可以表达；但 SQLite 这类没有 host/port 概念的库仍会看到多余字段，届时升级为「字段完全由方言声明」（见 [`docs/05_Docs/decisions/`](docs/05_Docs/decisions/)）
 - **客户端字典命名空间与部分内部标识符仍带 MySQL 字样**：工具名（`db_*`）、设置命名空间（`ds-db`）、路由（`/api/ds-db/*`）都已中立；字典命名空间 `settings.mysql` 与若干 TS 标识符不对外暴露，改名属纯内部重构

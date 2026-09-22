@@ -32,15 +32,16 @@
     }
   },
   "scripts": {
-    "build": "node scripts/build-host.mjs && node scripts/build-client.mjs",
+    "build": "node scripts/build-host.mjs && node scripts/build-client.mjs && node scripts/build-dialects.mjs",
     "prepare": "npm run build",
-    "typecheck": "tsc -p tsconfig.types.json",
-    "test": "node --import tsx/esm --test tests/sql-guard.test.ts tests/dialect-mysql.test.ts tests/dialect-audit.test.ts",
+    "typecheck": "tsc -p tsconfig.types.json && tsc -p dialects/mysql/tsconfig.types.json",
+    "test": "node --import tsx/esm --test dialects/mysql/tests/sql-guard.test.ts dialects/mysql/tests/dialect.test.ts dialects/mysql/tests/contract-audit.test.ts",
+    "test:dialects": "npm --prefix dialects/mysql test",
     "overlay": "node scripts/dev-overlay.mjs",
     "verify:host": "node --import tsx/esm scripts/verify-host.mjs"
   },
   "dependencies": {
-    "mysql2": "^3.14.0"
+    "dsh-dialect-mysql": "workspace:^"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "*",

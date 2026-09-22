@@ -1,26 +1,38 @@
 /**
- * The MySQL dialect: its driver, its metadata statements, and its syntax.
+ * The MySQL dialect, as a plugin of its own.
  *
- * Everything this module owns is a fact about MySQL rather than about
- * read-only database access in general — the `mysql2` pool, `information_schema`
- * column names, `?` placeholders, backtick identifiers, `LIMIT` bounding, and
- * the constructs MySQL spells that still write or lock.
+ * It is a dialect *package* exactly like a third party's: it injects the
+ * registry `dsh-ds-db` provides, registers one dialect into it, and owns the
+ * MySQL-specific facts — the `mysql2` pool, `information_schema` column names,
+ * `?` placeholders, backtick identifiers, `LIMIT` bounding, and the constructs
+ * MySQL spells that still write or lock.
  *
- * @module dsh-ds-db/src/dialect-mysql
+ * The core plugin ships no dialect of its own; this package is the only place
+ * MySQL is known, and it loads through the same registry path any other
+ * dialect package does.
+ *
+ * @module dsh-dialect-mysql
  */
 
-import mysql from 'mysql2/promise'
-import type { FieldPacket, Pool } from 'mysql2/promise'
-import { DIALECT_CAPABILITIES, type DialectCapability } from './dialect.ts'
+import type { Context } from '@deepseek-ai/cordis'
+import { DIALECT_CAPABILITIES, type DialectCapability } from 'dsh-ds-db/src/dialect.ts'
 import type {
   DatabaseConnection, DatabaseDialect, DialectColumnRow, DialectDatabaseRow,
   DialectIndexRow, DialectQuery, DialectSession, DialectStatement, DialectTableRow,
-} from './dialect.ts'
+} from 'dsh-ds-db/src/dialect.ts'
 import {
   ROW_PRODUCING_LEAD, SHARED_FORBIDDEN, scanStatement,
   type ReadOnlyRules, type SqlLexical,
-} from './sql-guard.ts'
-import { cellFlag, cellInteger, cellIsZero, cellOptionalText, cellText, type DbRow } from './value.ts'
+} from 'dsh-ds-db/src/sql-guard.ts'
+import { cellFlag, cellInteger, cellIsZero, cellOptionalText, cellText, type DbRow } from 'dsh-ds-db/src/value.ts'
+import mysql from 'mysql2/promise'
+import type { FieldPacket, Pool } from 'mysql2/promise'
+
+/** Stable Loader identity. */
+export const name = 'dialect-mysql'
+
+/** The registry the core plugin provides is the one service this needs. */
+export const inject = ['databaseDialects']
 
 /** Connections one plugin instance holds open. */
 const POOL_CONNECTION_LIMIT = 4
@@ -89,14 +101,14 @@ function createStatementOf(row: DbRow): string {
   return cellText(values[1] ?? values[0])
 }
 
-/** One statement's statement text and bound values, spelled the way the driver wants them. */
+/** One statement's text and bound values, spelled the way the driver wants them. */
 function statement(sql: string, values: readonly (string | number)[] = []): DialectStatement {
   return { sql, values }
 }
 
 /** Quote one MySQL identifier, so a name carrying a backtick cannot leave its own statement. */
-function quoteMysqlIdentifier(name: string): string {
-  return `\`${name.replaceAll('`', '``')}\``
+function quoteMysqlIdentifier(identifier: string): string {
+  return `\`${identifier.replaceAll('`', '``')}\``
 }
 
 /**
@@ -162,15 +174,14 @@ function createPool(connection: DatabaseConnection): Pool {
 /**
  * The MySQL dialect.
  *
- * A deployment selects it with `dialect: mysql`; it is the dialect this plugin
- * registers by itself, so a single-package install needs no further row.
+ * A connection selects it with `dialect: mysql`. It answers every metadata
+ * question the tools can ask, including a sampled row set and an execution
+ * plan, so nothing above it degrades.
  */
 export const MYSQL_DIALECT: DatabaseDialect = {
   name: 'mysql',
   label: 'MySQL',
   rules: MYSQL_RULES,
-  // MySQL answers every metadata question the tools can ask, including a
-  // sampled row set and an execution plan, so nothing above it degrades.
   capabilities: new Set<DialectCapability>(DIALECT_CAPABILITIES),
   // MySQL needs no field beyond the shared ones; a server that does declares
   // its own here and reads it back from `connection.extra`.
@@ -188,8 +199,8 @@ export const MYSQL_DIALECT: DatabaseDialect = {
     return `${statementText}\nLIMIT ${String(maxRows + 1)}`
   },
 
-  quoteIdentifier(name: string): string {
-    return quoteMysqlIdentifier(name)
+  quoteIdentifier(identifier: string): string {
+    return quoteMysqlIdentifier(identifier)
   },
 
   databases(): DialectQuery<DialectDatabaseRow> {
@@ -289,4 +300,15 @@ export const MYSQL_DIALECT: DatabaseDialect = {
       project: row => JSON.stringify(row),
     }
   },
+}
+
+/**
+ * Register the dialect.
+ *
+ * Registration is an effect, so unloading this package takes the dialect with
+ * it and a connection that names `mysql` is refused by name again.
+ * @param ctx - the plugin context, which serves the registry this package injects.
+ */
+export function apply(ctx: Context): void {
+  ctx.effect(() => ctx.databaseDialects.register(MYSQL_DIALECT), 'mysql dialect')
 }

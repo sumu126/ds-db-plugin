@@ -304,6 +304,7 @@ export interface DatabaseDialect {
  */
 export class DatabaseDialectRegistry extends Service {
   private readonly dialects = new Map<string, DatabaseDialect>()
+  private readonly waiting = new Map<string, Set<() => void>>()
 
   /** @param ctx - the plugin context that owns this registry. */
   constructor(ctx: Context) {
@@ -342,7 +343,35 @@ export class DatabaseDialectRegistry extends Service {
       throw new Error(`database dialect "${dialect.name}" declares "explain" but implements no explain()`)
     }
     this.dialects.set(dialect.name, dialect)
+    // The listener runs synchronously here, so a caller that registers a tool
+    // set from it sees the dialect before any call can arrive.
+    const waiting = this.waiting.get(dialect.name)
+    if (waiting !== undefined) {
+      this.waiting.delete(dialect.name)
+      for (const listener of waiting) listener()
+    }
     return () => { this.dialects.delete(dialect.name) }
+  }
+
+  /**
+   * Run one listener as soon as a dialect under `name` is registered.
+   *
+   * A dialect package always loads after this plugin — the registry is provided
+   * here — so a caller that must act on a dialect's own facts waits instead of
+   * reading whatever is registered at load time.
+   * @param name - the registry key to wait for.
+   * @param listener - what to run once it is registered.
+   * @returns the disposer removing the wait again.
+   */
+  whenRegistered(name: string, listener: () => void): () => void {
+    if (this.dialects.has(name)) {
+      listener()
+      return () => {}
+    }
+    const waiting = this.waiting.get(name) ?? new Set<() => void>()
+    waiting.add(listener)
+    this.waiting.set(name, waiting)
+    return () => { waiting.delete(listener) }
   }
 
   /**
@@ -357,6 +386,72 @@ export class DatabaseDialectRegistry extends Service {
   /** @returns every registered dialect name, sorted. */
   names(): string[] {
     return [...this.dialects.keys()].sort()
+  }
+}
+
+/**
+ * The dialect facts a model-facing description is written from.
+ *
+ * It is the part of {@link DatabaseDialect} the tools read at registration
+ * time, kept separate so a description can be written before a dialect package
+ * has loaded: the plugin knows only the name until then.
+ */
+export interface DialectFacts {
+  /** How the dialect names itself, such as `MySQL`. */
+  readonly label: string
+  /** The metadata abilities it declares. */
+  readonly capabilities: ReadonlySet<DialectCapability>
+  /** The connection fields it declares. */
+  readonly configFields: readonly DialectConfigField[]
+  /** The row-bound clause a model should write itself. */
+  readonly rowBoundHint: string
+  /** Schemas the server owns. */
+  readonly systemDatabases: readonly string[]
+  /** How its statements are judged before execution. */
+  readonly rules: ReadOnlyRules
+}
+
+/**
+ * The rules of a dialect that has not loaded yet: nothing is admitted, so an
+ * unregistered dialect cannot be talked past the guard while it is missing.
+ */
+const UNREGISTERED_RULES: ReadOnlyRules = {
+  lexical: { quotes: [], lineComments: [] },
+  lead: /(?!)/,
+  families: [],
+  forbidden: [],
+}
+
+/**
+ * The facts to write descriptions from, whether or not the dialect has loaded.
+ *
+ * The registry is provided by this plugin, so a dialect package always loads
+ * after it; descriptions are therefore written from whatever is registered at
+ * that moment, and a dialect that arrives later still runs every call. Until it
+ * does, its facts are the refusing stand-in above and its label is its name.
+ * @param registry - the dialects registered in this deployment.
+ * @param name - the configured dialect name.
+ * @returns the dialect's facts, or the stand-in when nothing is registered yet.
+ */
+export function dialectFacts(registry: DatabaseDialectRegistry, name: string): DialectFacts {
+  const dialect = registry.get(name)
+  if (dialect !== undefined) {
+    return {
+      label: dialect.label,
+      capabilities: dialect.capabilities,
+      configFields: dialect.configFields,
+      rowBoundHint: dialect.rowBoundHint,
+      systemDatabases: dialect.systemDatabases,
+      rules: dialect.rules,
+    }
+  }
+  return {
+    label: name,
+    capabilities: new Set<DialectCapability>(),
+    configFields: [],
+    rowBoundHint: '',
+    systemDatabases: [],
+    rules: UNREGISTERED_RULES,
   }
 }
 

@@ -1,0 +1,27 @@
+{
+  "name": "dsh-dialect-template",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Starting point for a dsh-ds-db dialect: copy this directory, rename it, and replace the marked parts.",
+  "type": "module",
+  "main": "lib/index.js",
+  "license": "MIT",
+  "scripts": {
+    "build": "node ../../scripts/build-dialects.mjs .",
+    "test": "node --import tsx/esm --test tests/*.test.ts",
+    "verify": "node --import tsx/esm scripts/verify.ts"
+  },
+  "peerDependencies": {
+    "dsh-ds-db": "*"
+  },
+  "peerDependenciesMeta": {
+    "dsh-ds-db": { "optional": true }
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@types/node": "^22.20.0",
+    "dsh-ds-db": "file:../..",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
+  }
+}

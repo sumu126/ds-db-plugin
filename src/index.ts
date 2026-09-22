@@ -22,8 +22,8 @@ import type {} from '@deepseek-ai/dsh-tools'
 import { DatabaseAccess } from './connection.ts'
 import { MYSQL_DIALECTS_PATH, MYSQL_SETTINGS_NAMESPACE, MYSQL_TEST_PATH, type DatabaseSettings, type DialectCatalog, type MysqlSettings, type ProbeRequest } from './contract.ts'
 import { KNOWN_DIALECT_PACKAGES } from './dialect-catalog.ts'
-import { DatabaseDialectRegistry, resolveDialect, type DatabaseConnection, type DatabaseDialect } from './dialect.ts'
-import { MYSQL_DIALECT } from './dialect-mysql.ts'
+import { DatabaseDialectRegistry, dialectFacts, resolveDialect, type DatabaseConnection, type DatabaseDialect } from './dialect.ts'
+import { DEFAULT_DIALECT_NAME } from './dialect-catalog.ts'
 import { compositionEntry, Config, DatabaseSettingsSchema } from './settings.ts'
 import { applyDatabaseTools } from './tools.ts'
 
@@ -37,6 +37,15 @@ export const name = 'ds-db'
 
 /** The tool registry is the one service this plugin cannot work without. */
 export const inject = ['tools']
+
+/**
+ * How long tool registration waits for the configured dialect package.
+ *
+ * Long enough for a sibling row of the same patch to activate, short enough
+ * that a missing package still ends with registered tools and a refusal naming
+ * what is available.
+ */
+const DIALECT_WAIT_MS = 100
 
 /** Connection test response the settings page renders. */
 interface ProbePayload {
@@ -104,23 +113,49 @@ export function apply(ctx: Context, config: Config): void {
     })
   })
 
+  // This plugin provides the registry and ships no dialect of its own: every
+  // database type, MySQL included, arrives as a package that registers itself
+  // through `inject: ['databaseDialects']`.
   const registry = new DatabaseDialectRegistry(ctx)
-  ctx.effect(() => registry.register(MYSQL_DIALECT), 'ds-db: mysql dialect')
   const readDialect = (): DatabaseDialect => resolveDialect(registry, activeConnection(readSettings()).dialect)
-  // Model-facing descriptions are fixed when the tools are registered, so they
-  // are written from the dialect the composition entry starts on. A dialect
-  // that activates later still runs every call, and only that registration-time
-  // wording lags until the plugin is reloaded.
   const initialDialect = entry.connections.find(profile => profile.id === entry.activeId)?.dialect
-    ?? MYSQL_DIALECT.name
-  const described = registry.get(initialDialect) ?? { ...MYSQL_DIALECT, label: initialDialect }
+    ?? DEFAULT_DIALECT_NAME
 
   const access = new DatabaseAccess({
     connection: async () => await resolveConnection(ctx, activeConnection(readSettings())),
     dialect: readDialect,
   })
   ctx.effect(() => () => { void access.dispose() }, 'ds-db: database session')
-  applyDatabaseTools(ctx, { access, dialect: readDialect, described, settings: () => activeConnection(readSettings()) })
+  // Model-facing descriptions are fixed when the tools are registered, so they
+  // are written from the dialect's own facts rather than from its name. The
+  // dialect package therefore has to be registered first, and it always loads
+  // after this plugin because the registry is provided here.
+  //
+  // A configured dialect that never registers would leave the model with no
+  // tools at all, so the wait is bounded: past it the tools are registered from
+  // the stand-in facts, and a call answers with the refusal that names what is
+  // registered — which is what a misspelled or missing package should say.
+  let registered = false
+  const registerTools = (): void => {
+    if (registered) return
+    registered = true
+    applyDatabaseTools(ctx, {
+      access,
+      dialect: readDialect,
+      described: dialectFacts(registry, initialDialect),
+      settings: () => activeConnection(readSettings()),
+    })
+  }
+  ctx.effect(() => {
+    const waiting = registry.whenRegistered(initialDialect, registerTools)
+    const timer = setTimeout(registerTools, DIALECT_WAIT_MS)
+    // A pending timer must not hold the process open once the plugin unloads.
+    timer.unref?.()
+    return () => {
+      waiting()
+      clearTimeout(timer)
+    }
+  }, `ds-db: tools for ${initialDialect}`)
 
   // The browser-connection carrier is optional: a headless deployment has no
   // settings page to probe for, and the tools work without it.

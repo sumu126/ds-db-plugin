@@ -14,6 +14,7 @@
 
 import z from '@deepseek-ai/schemastery'
 import { DEFAULT_CONNECTION_ID, DEFAULT_PASSWORD_REF, type DatabaseSettings, type MysqlSettings } from './contract.ts'
+import { DEFAULT_DIALECT_NAME } from './dialect-catalog.ts'
 
 /**
  * Connection values a deployment that configures nothing gets. They point at a
@@ -23,7 +24,7 @@ import { DEFAULT_CONNECTION_ID, DEFAULT_PASSWORD_REF, type DatabaseSettings, typ
 export const MYSQL_DEFAULTS: MysqlSettings = {
   id: DEFAULT_CONNECTION_ID,
   name: 'MySQL',
-  dialect: 'mysql',
+  dialect: DEFAULT_DIALECT_NAME,
   extra: {},
   host: '127.0.0.1',
   port: 3306,

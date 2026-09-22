@@ -5,8 +5,8 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { MYSQL_DIALECT } from '../src/dialect-mysql.ts'
-import { assertReadOnlyStatement, familiesPhrase } from '../src/sql-guard.ts'
+import { MYSQL_DIALECT } from '../src/index.ts'
+import { assertReadOnlyStatement, familiesPhrase } from 'dsh-ds-db/src/sql-guard.ts'
 
 test('publishes the facts the model-facing text is written from', () => {
   assert.equal(MYSQL_DIALECT.name, 'mysql')

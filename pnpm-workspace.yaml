@@ -1,9 +1,14 @@
-# The plugin is its own pnpm project: it depends on the driver and on build
-# tooling, and on nothing from the harness checkout it is developed beside.
+# The core plugin is the workspace root; each dialect under dialects/ is a
+# package of its own, so a dialect resolves the plugin API by package name the
+# same way an out-of-tree dialect does.
+#
+# `_template` is a starting point rather than a package, so it is not a member.
 packages:
   - .
+  - dialects/*
+  - '!dialects/_template'
 
 # esbuild's install script only selects its platform binary; pnpm ≥10 refuses
-# to run an unlisted build script, and the browser bundle build needs it.
+# to run an unlisted build script, and the client and dialect bundles need it.
 allowBuilds:
   esbuild: true

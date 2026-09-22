@@ -19,7 +19,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { MysqlSettings } from './contract.ts'
 import type { DatabaseAccess } from './connection.ts'
-import type { DatabaseDialect, DialectCapability, DialectIndexRow } from './dialect.ts'
+import type { DatabaseDialect, DialectCapability, DialectFacts, DialectIndexRow } from './dialect.ts'
 import { assertReadOnlyStatement, familiesPhrase } from './sql-guard.ts'
 
 /** Identity and limits one tool call runs against. */
@@ -29,12 +29,12 @@ export interface DatabaseToolsFace {
   /** The dialect in force, re-resolved per call. */
   dialect: () => DatabaseDialect
   /**
-   * The dialect the model-facing descriptions are written from, fixed when the
-   * tools are registered. It is separate from {@link dialect} because a dialect
-   * may activate after this plugin: the wording is settled once, while every
-   * call still resolves the dialect that is really in force.
+   * The dialect facts the model-facing descriptions are written from, fixed
+   * when the tools are registered. It is separate from {@link dialect} because
+   * a dialect package loads after this plugin: the wording is settled once,
+   * while every call still resolves the dialect that is really in force.
    */
-  described: DatabaseDialect
+  described: DialectFacts
   /** Current resolved settings section. */
   settings: () => MysqlSettings
 }
@@ -288,7 +288,9 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
     description: `Run one read-only ${described.label} statement and return its rows as JSON. `
       // `and`, unlike the refusal's `or`: the description enumerates what the
       // tool accepts, and that is the wording this text has always used.
-      + `Only ${familiesPhrase(described.rules.families, 'and')} are accepted; a single statement per call. `
+      // An unregistered dialect declares no families; the wording then names the
+      // property rather than printing an empty list.
+      + `Only ${described.rules.families.length === 0 ? 'read-only statements' : familiesPhrase(described.rules.families, 'and')} are accepted; a single statement per call. `
       + `Results are cut at the deployment's row cap, so ask for the rows you need with WHERE, ORDER BY, and ${described.rowBoundHint}.`,
     parameters: {
       sql: { type: 'string', required: true, description: 'One read-only statement, without a trailing semicolon requirement.' },

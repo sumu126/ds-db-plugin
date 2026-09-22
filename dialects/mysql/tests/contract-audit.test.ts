@@ -1,17 +1,16 @@
 /**
- * The dialect contract audit, run over this plugin's own dialect and over
- * dialects that break it on purpose. The audit is what a dialect package runs
- * before publishing, so these cases are also the documentation of what it
- * refuses.
+ * The dialect contract audit, run over this package's dialect and over dialects
+ * that break it on purpose. The audit is what a dialect package runs before
+ * publishing, so these cases are also the documentation of what it refuses.
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { MYSQL_DIALECT } from '../src/dialect-mysql.ts'
-import { auditDialect } from '../src/dialect-audit.ts'
-import type { DatabaseDialect } from '../src/dialect.ts'
+import { auditDialect } from 'dsh-ds-db/src/dialect-audit.ts'
+import type { DatabaseDialect } from 'dsh-ds-db/src/dialect.ts'
+import { MYSQL_DIALECT } from '../src/index.ts'
 
-/** The dialect this plugin ships passes its own audit. */
-test('the bundled MySQL dialect passes the contract audit', () => {
+/** The dialect this package ships passes the contract audit. */
+test('the MySQL dialect passes the contract audit', () => {
   assert.deepEqual(auditDialect(MYSQL_DIALECT), [])
 })
 

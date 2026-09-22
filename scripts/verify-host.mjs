@@ -15,7 +15,8 @@ import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import * as mysqlReadOnly from '../src/index.ts'
 import { dialectCatalog } from '../src/index.ts'
-import { MYSQL_DIALECT } from '../src/dialect-mysql.ts'
+import * as mysqlDialect from '../dialects/mysql/src/index.ts'
+import { MYSQL_DIALECT } from '../dialects/mysql/src/index.ts'
 
 const TOOL_NAMES = ['db_databases', 'db_tables', 'db_describe', 'db_query']
 
@@ -36,12 +37,25 @@ const SHIPPED_DESCRIPTIONS = {
 /** A port nothing listens on: every connection attempt fails fast. */
 const UNREACHABLE = { host: '127.0.0.1', port: 1, user: 'nobody', database: '' }
 
-/** Mount a context with the tool registry and this plugin. */
+/**
+ * Mount a context with the tool registry, the dialect package, and the plugin.
+ *
+ * The dialect is mounted as a plugin of its own, in the order the bundle patch
+ * uses: it waits for the registry the plugin provides, and the plugin registers
+ * its tools once the dialect is registered. Nothing here reads MySQL from the
+ * plugin's own source, because the plugin no longer contains any database type.
+ */
 async function mount(config) {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt, {})
   await ctx.plugin(ToolRuntime, { mode: 'native', maxParallelSubCalls: 1 })
+  await ctx.plugin(mysqlDialect, {})
   await ctx.plugin(mysqlReadOnly, config)
+  // The tools appear when the dialect registers; that activation is a fiber
+  // transition, so the check waits for the observable it asserts on.
+  for (let attempt = 0; attempt < 100 && ctx.tools.get('db_query') === undefined; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
   return ctx
 }
 
