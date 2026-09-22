@@ -1,0 +1,96 @@
+/**
+ * Copy for the MySQL settings page, in both supported languages. The page
+ * reads every string through the locale seat, so no product text lives in a
+ * component.
+ *
+ * @module dsh-ds-db/src/client/locales
+ */
+
+/** Chinese dictionary; also the key source for the namespace. */
+export const zh = {
+  nav: 'MySQL',
+  title: 'MySQL 只读连接',
+  description: '配置只读 MySQL 连接。密码保存在凭据存储中而不是这里，模型只能执行查询语句。',
+  connectionHeading: '连接',
+  host: '主机',
+  hostHint: 'MySQL 服务器地址，例如 127.0.0.1 或 db.internal。',
+  port: '端口',
+  portHint: 'MySQL 服务器 TCP 端口，默认 3306。',
+  user: '账号',
+  userHint: '插件连接使用的 MySQL 账号，建议使用只有查询权限的只读账号。',
+  database: '默认数据库',
+  databaseHint: '留空则不设默认库，此时每次工具调用都要指定数据库。',
+  passwordEnv: '密码引用名',
+  passwordEnvHint: '密码在凭据存储中的引用名，需为环境变量形式的标识符。',
+  password: '密码',
+  passwordHint: '写入凭据存储且不会回显；留空表示保留已保存的密码。',
+  passwordSet: '已配置',
+  passwordUnset: '未配置',
+  limitsHeading: '限制',
+  connectTimeout: '连接超时（毫秒）',
+  connectTimeoutHint: '建立 TCP 连接的最长等待时间。',
+  queryTimeout: '查询超时（毫秒）',
+  queryTimeoutHint: '单条语句的最长执行时间，超时后服务器终止该语句。',
+  maxRows: '最大返回行数',
+  maxRowsHint: '单次查询返回给模型的最大行数，超出部分被截断。',
+  overridden: '已覆盖',
+  reset: '恢复默认',
+  invalidNumber: '请输入正整数（端口范围 1-65535）。',
+  invalidText: '不能为空。',
+  invalidReference: '请使用字母或下划线开头的标识符。',
+  save: '保存',
+  saving: '保存中',
+  saveFailed: '保存失败：主机拒绝了这次修改。',
+  readOnly: '当前设置文档为只读，修改无法保存。',
+  unavailable: '主机没有提供 MySQL 设置命名空间，该页面不可用。',
+  test: '测试连接',
+  testing: '测试中',
+  testOk: '连接成功：MySQL {version}，耗时 {latency} 毫秒。',
+  testFailed: '连接失败：{message}',
+} as const
+
+/** English dictionary, keyed by the Chinese one. */
+export const en: Record<keyof typeof zh, string> = {
+  nav: 'MySQL',
+  title: 'MySQL read-only connection',
+  description: 'Configure the read-only MySQL connection. The password lives in the credential store rather than here, and the model can only run queries.',
+  connectionHeading: 'Connection',
+  host: 'Host',
+  hostHint: 'MySQL server address, such as 127.0.0.1 or db.internal.',
+  port: 'Port',
+  portHint: 'MySQL server TCP port; 3306 by default.',
+  user: 'User',
+  userHint: 'MySQL account the plugin connects as; a read-only account with SELECT privileges is the intended deployment.',
+  database: 'Default database',
+  databaseHint: 'Leave empty to keep every tool call naming its own database.',
+  passwordEnv: 'Password reference',
+  passwordEnvHint: 'Reference name the password is stored under; an environment-variable style identifier.',
+  password: 'Password',
+  passwordHint: 'Written to the credential store and never read back; leave empty to keep the stored password.',
+  passwordSet: 'Configured',
+  passwordUnset: 'Not configured',
+  limitsHeading: 'Limits',
+  connectTimeout: 'Connect timeout (ms)',
+  connectTimeoutHint: 'How long establishing the TCP connection may take.',
+  queryTimeout: 'Query timeout (ms)',
+  queryTimeoutHint: 'How long one statement may run before the server terminates it.',
+  maxRows: 'Maximum rows',
+  maxRowsHint: 'Rows one query may return to the model; the rest is truncated.',
+  overridden: 'Overridden',
+  reset: 'Reset',
+  invalidNumber: 'Enter a positive whole number (ports run 1-65535).',
+  invalidText: 'Cannot be empty.',
+  invalidReference: 'Use an identifier starting with a letter or underscore.',
+  save: 'Save',
+  saving: 'Saving',
+  saveFailed: 'Save failed: the host refused this change.',
+  readOnly: 'This settings document is read-only; changes cannot be saved.',
+  unavailable: 'The host serves no MySQL settings namespace, so this page is unavailable.',
+  test: 'Test connection',
+  testing: 'Testing',
+  testOk: 'Connected: MySQL {version} answered in {latency} ms.',
+  testFailed: 'Connection failed: {message}',
+}
+
+/** One dictionary key of the MySQL settings page. */
+export type MysqlLocaleKey = keyof typeof zh

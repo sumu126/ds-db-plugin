@@ -1,0 +1,9 @@
+# The plugin is its own pnpm project: it depends on the driver and on build
+# tooling, and on nothing from the harness checkout it is developed beside.
+packages:
+  - .
+
+# esbuild's install script only selects its platform binary; pnpm ≥10 refuses
+# to run an unlisted build script, and the browser bundle build needs it.
+allowBuilds:
+  esbuild: true

@@ -1,0 +1,21 @@
+# The layer this bundle contributes: one row mounting the MySQL read-only
+# plugin. A patch replaces a row's whole `config`, so restate every key you want
+# to keep when overriding these deployment defaults from a profile patch.
+- insert:
+    - id: ds-db
+      name: 'dsh-ds-db'
+      config:
+        # Registered dialect to run the tools against. This plugin registers
+        # `mysql` itself; a further dialect ships as its own package and is
+        # registered into the same registry.
+        dialect: mysql
+        host: 127.0.0.1
+        port: 3306
+        user: root
+        database: ''
+        # Credential reference holding the account password; the MySQL settings
+        # page writes the literal into the credential store under this name.
+        passwordEnv: DSH_MYSQL_PASSWORD
+        connectTimeoutMs: 10000
+        queryTimeoutMs: 30000
+        maxRows: 200

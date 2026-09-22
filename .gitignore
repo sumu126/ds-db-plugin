@@ -1,0 +1,9 @@
+# Installed dependencies and the build tool's own store.
+node_modules/
+.pnpm-store/
+
+# Build output: regenerate with `npm run build`.
+lib/
+
+# Development scratch: the generated overlay and a scratch DSH_HOME.
+.dev/

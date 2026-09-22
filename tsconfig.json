@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "target": "es2024",
+    "lib": ["es2024", "dom", "dom.iterable"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "jsx": "react-jsx",
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "types": ["node"],
+    "paths": {
+      "@deepseek-ai/cordis": ["../deepseek-harness/vendor/cordis/src/index.ts"],
+      "@deepseek-ai/schemastery": ["../deepseek-harness/vendor/schemastery/src/index.ts"],
+      "@deepseek-ai/dsh-tools": ["../deepseek-harness/packages/core/tools/src/index.ts"],
+      "@deepseek-ai/dsh-system-prompt": ["../deepseek-harness/packages/core/system-prompt/src/index.ts"],
+      "@deepseek-ai/dsh-settings": ["../deepseek-harness/packages/settings/settings/src/index.ts"],
+      "@deepseek-ai/dsh-credentials": ["../deepseek-harness/packages/credentials/credentials/src/index.ts"],
+      "@deepseek-ai/dsh-credentials/types": ["../deepseek-harness/packages/credentials/credentials/src/types.ts"],
+      "@deepseek-ai/dsh-client-ui-slots": ["../deepseek-harness/packages/client/ui-slots/src/index.ts"],
+      "@deepseek-ai/dsh-client-ui-renderer/client": ["../deepseek-harness/packages/client/ui-renderer/src/client/index.ts"],
+      "@deepseek-ai/dsh-client-ui-settings/client": ["../deepseek-harness/packages/client/ui-settings/src/client/index.ts"],
+      "@deepseek-ai/dsh-client-locale/client": ["../deepseek-harness/packages/client/locale/src/client/index.ts"],
+      "@deepseek-ai/dsh-client-store": ["../deepseek-harness/packages/client/store/src/index.ts"],
+      "@deepseek-ai/dsh-api-remotes/client": ["../deepseek-harness/packages/api/remotes/src/client/index.ts"]
+    }
+  },
+  "include": ["src", "tests"]
+}
