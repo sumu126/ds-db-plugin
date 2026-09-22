@@ -1,7 +1,7 @@
 # 方言扩展 API（方言作者契约）
 
 > 面向**第三方开发者**：实现下列接口并发布一个包，即可为 dsh 增加一种数据库类型，无需修改 `dsh-ds-db` 仓库。
-> 现状说明：以下契约**均已实现**（2026-09-22）。以 [`examples/dsh-dialect-postgres`](../../examples/dsh-dialect-postgres/README.md) 为模板。
+> 现状说明：以下契约**均已实现**（2026-09-22）。起手用 [`dialects/_template`](../../dialects/_template/README.md)，参考实现看 [`dialects/mysql/src/index.ts`](../../dialects/mysql/src/index.ts)。
 
 ## 1. 最小可运行包
 

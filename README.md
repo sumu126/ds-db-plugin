@@ -9,8 +9,8 @@
 | 你 | 直接看 |
 | --- | --- |
 | 想让模型查自己的库 | [快速开始](#快速开始使用者) |
-| **想让 dsh 支持一种新的数据库** | [给方言作者](#给方言作者增加一种数据库类型)｜[`dialects/README.md`](dialects/README.md) |
-| 想在**本仓**加一个官方/合作方言 | [`dialects/_template/`](dialects/_template/README.md) |
+| **想让 dsh 支持一种新的数据库** | [给方言作者](#给方言作者增加一种数据库类型) |
+| 想加方言（起手骨架 / 工作区规则） | [`dialects/_template/`](dialects/_template/README.md)｜[`dialects/README.md`](dialects/README.md) |
 | 想改插件本身（seam、工具、设置页） | [给插件开发者](#给插件开发者本地开发) |
 
 ## 能力一览
@@ -51,10 +51,11 @@
 │   └── client/             # 浏览器半边：设置整页、表单状态机、双语字典、CSS Modules
 ├── dialects/               # ★ 数据库类型工作区
 │   ├── mysql/              #   dsh-dialect-mysql：官方方言，随主包自动安装
+│   │   ├── src/index.ts    #     完整真实实现，写新方言时的参考
+│   │   ├── tests/          #     该方言的行为测试
+│   │   └── scripts/verify.ts #   契约自检
 │   ├── _template/          #   新方言的起手骨架（不是包）
 │   └── README.md           #   工作区说明：怎么加一个方言
-├── examples/
-│   └── dsh-dialect-postgres/  # 仓外独立包的完整示例（含驱动与元数据 SQL）
 ├── docs/                   # 需求、设计、API 契约、决策记录
 ├── scripts/                # 构建与验证脚本
 ├── lib/                    # 构建产物（npm run build 生成，不入库）
@@ -234,24 +235,22 @@ const problems = auditDialect(YOUR_DIALECT)   // 空数组 = 通过
 
 ### 从模板开始
 
-两个起点，按你的去向选：
-
-| 起点 | 用于 | 特点 |
-| --- | --- | --- |
-| [`dialects/_template/`](dialects/_template/README.md) | 在**本仓**开发（官方/合作方言） | 骨架 + TODO，已在 workspace 内，导入走包名 |
-| [`examples/dsh-dialect-postgres/`](examples/dsh-dialect-postgres/) | **复制出去**建独立仓并发布 | 完整可跑的真实方言，含驱动与 `information_schema` 元数据 SQL |
+一个起点，两种去向：
 
 ```sh
-# A. 仓内：复制骨架，改完即跑
-cp -r dialects/_template dialects/clickhouse
-cd dialects/clickhouse && npm run verify
+# 复制骨架
+cp -r dialects/_template <你的方言目录>
 
-# B. 出仓：拿完整示例当底子
-cp -r examples/dsh-dialect-postgres ~/dsh-dialect-clickhouse
-cd ~/dsh-dialect-clickhouse && npm install --legacy-peer-deps && npm run verify
+# A. 留在本仓 dialects/ 下开发（官方/合作方言）
+mv <你的方言目录> dialects/clickhouse && cd dialects/clickhouse && npm run verify
+
+# B. 或复制出去建独立仓发布
+cd <你的方言目录> && git init && npm run verify && npm publish
 ```
 
-PostgreSQL 那份本身就是「能力缺失如何降级」的范例：它没有内置的 `SHOW CREATE TABLE` 等价物，所以不声明 `createStatement`。
+骨架里每个 `TODO` 都标了要改的位置；动手前建议先读 [`dialects/mysql/src/index.ts`](dialects/mysql/src/index.ts)——那是**完整真实的参考实现**，包括驱动接入、`information_schema` 元数据 SQL、只读规则与投影。
+
+它也是「能力缺失如何降级」的参照：方言不声明自己没有的能力（MySQL 全声明，PostgreSQL 类没有 `SHOW CREATE TABLE` 的话就不声明 `createStatement`），工具会自行降级而不是报错。
 
 ### 在仓内加方言要不要改核心？
 
@@ -300,7 +299,7 @@ pnpm dsh web --patch <插件目录>/.dev/cordis.yml
 
 ## 已知限制 / 暂未实现
 
-- **随主包分发的方言只有 `dsh-dialect-mysql`**：它和第三方方言形状完全一致，只是被核心的 bundle 层与 `dependencies` 一起带上。PostgreSQL 以仓外示例包形式提供（`examples/`），Oracle 未实现——加 PostgreSQL 便宜，加 Oracle 贵（无 `LIMIT`、无 `information_schema`、SID 与 service name 两种连法、`oracledb` 是重量级原生依赖）
+- **随主包分发的方言只有 `dsh-dialect-mysql`**：它和第三方方言形状完全一致，只是被核心的 bundle 层与 `dependencies` 一起带上。PostgreSQL 与 Oracle 都还没有实现——加 PostgreSQL 便宜（`information_schema` 大体可移植、`?`→`$n` 是机械替换），加 Oracle 贵（无 `LIMIT`、无 `information_schema`、SID 与 service name 两种连法、`oracledb` 是重量级原生依赖）。两者都可以照 `dialects/_template` 起手，并参考 `dialects/mysql` 的完整实现
 - **打包版 dsh 上的 `dsh plugin add` 安装实测未完成**：声明已补齐，缺真实打包环境验证
 - **配置字段是「通用字段 + `extra`」**：Oracle 这类需要 service name 的库可以表达；但 SQLite 这类没有 host/port 概念的库仍会看到多余字段，届时升级为「字段完全由方言声明」（见 [`docs/05_Docs/decisions/`](docs/05_Docs/decisions/)）
 - **客户端字典命名空间与部分内部标识符仍带 MySQL 字样**：工具名（`db_*`）、设置命名空间（`ds-db`）、路由（`/api/ds-db/*`）都已中立；字典命名空间 `settings.mysql` 与若干 TS 标识符不对外暴露，改名属纯内部重构

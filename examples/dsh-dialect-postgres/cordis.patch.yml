@@ -1,6 +1,0 @@
-# The layer this package contributes: one row mounting the dialect. It is a
-# package, not a settings row: the row only exists so the Loader loads it, and
-# `inject: ['databaseDialects']` is what makes `ctx.databaseDialects` available.
-- insert:
-    - id: dialect-postgres
-      name: 'dsh-dialect-postgres'

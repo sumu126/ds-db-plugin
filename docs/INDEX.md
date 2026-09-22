@@ -32,8 +32,10 @@
 ### 原始输入（`08_Resources/`）
 - [`08_Resources/2026-09-22_需求原话.md`](./08_Resources/2026-09-22_需求原话.md) — 需求来源记录
 
-### 参考实现（`examples/`）
-- [`examples/dsh-dialect-postgres/`](./../examples/dsh-dialect-postgres/README.md) — 仓外 PostgreSQL 方言，验证「不改本仓库即可增加数据库类型」
+### 方言工作区（`dialects/`）
+- [`dialects/README.md`](./../dialects/README.md) — 工作区规则、两种开发位置、常见问题
+- [`dialects/_template/`](./../dialects/_template/README.md) — 新方言起手骨架
+- [`dialects/mysql/src/index.ts`](./../dialects/mysql/src/index.ts) — 完整真实实现，写新方言时的参考
 
 ## 当前状态（2026-09-22）
 
