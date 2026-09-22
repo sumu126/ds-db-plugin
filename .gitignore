@@ -2,6 +2,9 @@
 node_modules/
 .pnpm-store/
 
+# Package managers other than the declared one must not leave a second lockfile.
+package-lock.json
+
 # Build output: regenerate with `npm run build`.
 lib/
 
