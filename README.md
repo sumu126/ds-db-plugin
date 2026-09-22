@@ -1,8 +1,31 @@
 # dsh-ds-db
 
-给 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）用的 **只读数据库插件**：一个独立的插件包，自带 Web 配置页面，并给模型暴露 4 个只读工具。它面向的数据库由**方言接缝**决定，当前内置 MySQL（`dialect: mysql`），加 PostgreSQL / Oracle 只需新增一个方言。
+给 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）用的 **只读数据库插件**：自带 Web 设置页，给模型暴露只读工具，而**它面向哪种数据库由可插拔的方言（dialect）决定**。内置 MySQL；要支持别的数据库，发一个方言包即可，不必改本仓库。
 
-插件是独立目录、独立的 pnpm 工程，不修改 `deepseek-harness` 仓库的任何文件。
+插件是独立目录、独立的工程，不修改 `deepseek-harness` 仓库的任何文件。
+
+## 你是哪一类读者
+
+| 你 | 直接看 |
+| --- | --- |
+| 想让模型查自己的库 | [快速开始](#快速开始使用者) |
+| **想让 dsh 支持一种新的数据库** | [给方言作者：增加一种数据库类型](#给方言作者增加一种数据库类型) |
+| 想改插件本身 | [给插件开发者：本地开发](#给插件开发者本地开发) |
+
+## 能力一览
+
+设置页管理**多条连接**（卡片列表、切换「使用中」立即生效）；模型侧的工具按当前使用的连接执行。
+
+| 工具 | 作用 | 需要的能力 |
+| --- | --- | --- |
+| `db_databases` | 列出可见的库（字符集/排序规则） | `databases` |
+| `db_tables` | 列出某库的表与视图（类型、引擎、行数估算、注释） | `tables` |
+| `db_describe` | 描述一张表：列、索引、建表语句（有则给） | `columns` |
+| `db_query` | 执行**一条**只读语句，返回列名与行 | 仅只读规则 |
+| `db_sample` | 读几行样本，先看数据形状 | `sample`（可选） |
+| `db_explain` | 解释一条语句的执行计划，不执行 | `explain`（可选） |
+
+后两个只在方言声明了对应能力时才注册——不支持的方言，模型工具列表里根本看不到它们。
 
 ## 组成
 
@@ -11,175 +34,256 @@
 ├── package.json            # 包清单：dsh.bundle（可安装层）+ dsh.client（浏览器半边）
 ├── cordis.patch.yml        # 以 bundle 安装时贡献的一层：一行 ds-db
 ├── src/                    # 源码（host 半边 + browser 半边）
-│   ├── index.ts            # host 入口：设置命名空间、方言注册表、工具、连接探测路由
+│   ├── index.ts            # host 入口：设置命名空间、方言注册表、工具、两条 API 路由
 │   ├── contract.ts         # 两半边共享的常量与类型（不含任何 import）
 │   ├── settings.ts         # Schemastery 配置 schema + 组合默认值
 │   ├── dialect.ts          # 方言 seam：DatabaseDialect 定义 + 注册表服务
-│   ├── dialect-mysql.ts    # MySQL provider：驱动、连接池、元数据 SQL、语法
+│   ├── dialect-mysql.ts    # MySQL 方言：驱动、连接池、元数据 SQL、语法
+│   ├── dialect-catalog.ts  # 已知但尚未安装的方言包清单
+│   ├── dialect-audit.ts    # ★ 方言契约自检（方言作者用）
 │   ├── connection.ts       # 方言中立的会话运行器（身份换会话、超时、截断、错误包装）
 │   ├── sql-guard.ts        # 只读语句判定（词法与禁止项由方言提供）
 │   ├── value.ts            # 无损 JSON 投影与单元格读取器
-│   ├── tools.ts            # 4 个模型可见工具（方言中立，不含 SQL）
+│   ├── tools.ts            # 模型可见工具（方言中立，不含 SQL）
 │   └── client/             # 浏览器半边：设置整页、表单状态机、双语字典、CSS Modules
+├── examples/
+│   └── dsh-dialect-postgres/  # ★ 仓外 PostgreSQL 方言，方言作者的模板
+├── docs/                   # 需求、设计、API 契约、决策记录
 ├── scripts/                # 构建与验证脚本
-├── tests/                  # 只读语句判定与 MySQL 方言的单元测试
-├── lib/                    # 构建产物（npm run build 生成，不入库；`prepare` 会在安装时自动构建）
+├── tests/                  # 单元测试
+├── lib/                    # 构建产物（npm run build 生成，不入库）
 ├── LICENSE                 # MIT
 └── .dev/                   # 开发用临时目录（生成的 overlay、临时 DSH_HOME）
 ```
 
-## 方言 seam
+## 快速开始（使用者）
 
-插件面向的数据库由**方言（dialect）**决定：`DatabaseDialect` 把一个数据库的差异全部收在一处，工具、配置页与会话运行器都不含任何方言知识。
+### 前置条件
 
-一个方言拥有：驱动与连接池、元数据语句（列别名与行投影）、占位符写法、行数上界语法、标识符引用、词法规则（引号/注释/转义）、禁止项清单，以及模型可见文案需要的事实（自称、放行的语句族、行数上界的写法、系统库名单）。
+- Node `^22.19 || >=24`
+- 一个可访问的数据库；**建议使用只有 `SELECT`（及元数据读取）权限的账号**——这是只读姿态的第三层，见 [只读姿态](#只读姿态的三层)
+- 一个 `dsh` 运行环境：源码 checkout（推荐，配合 `--patch`）或已安装的 `dsh` CLI
 
-- 注册表是 `ctx.databaseDialects`（由本插件提供）。本插件在加载时把自己那个方言注册进去，所以单包安装无需额外配置。
-- **本插件内新增方言**（推荐，文案完全正确）：仿照 `src/dialect-mysql.ts` 写一个 `MYSQL_DIALECT` 那样的对象，在 `src/index.ts` 里多注册一行，然后 `dialect: <名字>` 选用。
-- **单独打包一个方言**：新包 `inject: ['databaseDialects']` 后 `ctx.databaseDialects.register(dialect)`。调用会立即走这个方言；但**工具描述是注册时就写定的文本**，后到的方言只会让描述里的自称与语句族滞后到下次重载，调用本身不受影响（`described` 与 `dialect()` 在 `DatabaseToolsFace` 里是两个成员，正是这个区别）。
-- 名字没注册时在**首次调用**报错并列出已注册的方言：注册表由本插件提供，别的方言包只能在之后注册，所以加载期无法知道最终集合。
-
-## 前置条件
-
-- Node `^22.19 || >=24`，pnpm（本插件用自己的 pnpm 工程管理依赖）。
-- 一个可访问的 MySQL 服务；**建议使用只有 `SELECT`（以及 `SHOW VIEW`、`INFORMATION_SCHEMA` 读取）权限的账号**，这是只读姿态的第三层（见下）。
-- 一个 `dsh` 运行环境：源码 checkout（推荐，配合 `--patch` 覆盖层）或已安装的 `dsh` CLI。
-
-## 安装依赖并构建
+### 安装与构建
 
 ```sh
 cd ds-db-plugin
-pnpm install          # 安装 mysql2 与构建工具
-npm run build         # 产出 lib/index.js（host）与 lib/client.js（浏览器半边）
+pnpm install --no-frozen-lockfile      # 首选；宿主包是可选 peer，lockfile 需随声明更新
+# 若包管理器仍去解析未发布的宿主包：npm install --legacy-peer-deps
+npm run build                          # 产出 lib/index.js（host）与 lib/client.js（浏览器半边）
 ```
 
-`lib/client.js` 是必需产物：`dsh` 的客户端模块扫描读取包的 `exports["./client"]`，源码改动后必须重新构建浏览器半边。
+`lib/client.js` 是必需产物：`dsh` 的客户端模块扫描读取包的 `exports["./client"]`，改了 `src/client` 必须重新构建。
 
-## 加载插件
+### 加载插件
 
-### A. 源码 checkout（开发态，加载 `src/`）
+**A. 源码 checkout（开发态，加载 `src/`）**
 
 ```sh
 cd ds-db-plugin
 node scripts/dev-overlay.mjs            # 生成 .dev/cordis.yml（写入本机绝对路径）
 
 cd ../deepseek-harness
-node --import tsx/esm apps/cli/src/bin.ts web --patch <插件目录>/.dev/cordis.yml
-# 等价的 pnpm 写法：pnpm dsh web --patch <插件目录>/.dev/cordis.yml
+pnpm dsh web --patch <插件目录>/.dev/cordis.yml
 ```
 
-`--patch` 里的插件路径必须是绝对路径：补丁文件本身不改变 Loader 解析模块的目录。
+`--patch` 里的插件路径必须是绝对路径。
 
-### B. 安装进 profile（可安装包形态）
+**B. 安装进 profile（可安装包形态）**
 
 ```sh
-cd ds-db-plugin
-dsh plugin --profile demo add .          # pnpm 把本目录按 link: 装进 profile，并把本 bundle 追加进 dsh.profile.bundles
-dsh --profile demo --dump-config         # 应能看到 "# == dsh-ds-db" 这一层
+dsh plugin --profile demo add .
+dsh --profile demo --dump-config        # 应能看到 "# == dsh-ds-db" 这一层
 dsh --profile demo
 ```
 
-bundle 的 `cordis.patch.yml` 用包名引用本插件；profile 的 `dsh.profile.bundles` 顺序决定层序，profile 自己的 `cordis.patch.yml` 与 `--patch` 覆盖层永远排在后面（后者按行覆盖 `config`，是整块替换）。
+### 设置页
 
-**这条路本机未验证**（`pnpm` 不在 PATH 上，且它依赖的是打包版 dsh 的模块解析），已实测的是：
+设置 → **数据库管理**。页面管理多条连接：
 
-- 行指向 `src/index.ts`：在源码 checkout 下由 tsx 按 cwd 的 tsconfig `paths` 解析 `@deepseek-ai/*`，可用（下面「加载插件 A」即此路径，已跑通）。
-- 行指向 `lib/index.js`：在源码 checkout 下同样可用（tsx 的 `paths` 对 `.js` 生效，实测 `Object.keys` 为 `Config,apply,inject,name`）；但用**纯 Node**（不带 tsx）导入 `lib/index.js` 会 `ERR_MODULE_NOT_FOUND`——`@deepseek-ai/*` 是裸导入，需要由运行环境提供。装进打包版 dsh 时，本插件需自行声明这些 harness 包为依赖，这一步没有验证。
+- 每张卡片一条连接，悬浮抬升；徽标显示类型或「使用中」
+- 右上角**新建连接** → 先选数据库类型（已安装的方言可选，未安装的显示「即将支持」及包名）→ 再填该类型的字段
+- 卡片操作：**设为使用 / 测试 / 编辑 / 删除**；切换「使用中」后下一次工具调用即生效，不需要重启
+- 密码只写不读：经 `credentials/set` 存入凭据存储，设置文档里只有引用名
 
-## 配置页面
+### 配置（cordis.yml）
 
-设置 → **MySQL**（`settings.section`，`id` 为 `ds-db`，`order: 40`，排在通用设置 / 模型 / 内置插件之后）。页面读写的是一份 User Settings 命名空间 `ds-db`，只有被改动过的字段会落盘（例如只改端口时 `settings.yaml` 里只有 `ds-db.port`）。
-
-| 字段 | 默认 | 说明 |
-| --- | --- | --- |
-| `host` | `127.0.0.1` | MySQL 地址 |
-| `port` | `3306` | MySQL 端口 |
-| `user` | `root` | 连接账号 |
-| `database` | 空 | 默认库；留空则每次工具调用都要指定 |
-| `passwordEnv` | `DSH_MYSQL_PASSWORD` | 密码在凭据存储中的引用名 |
-| `connectTimeoutMs` | `10000` | 建连超时 |
-| `queryTimeoutMs` | `30000` | 单条语句超时 |
-| `maxRows` | `200` | 单次查询返回给模型的最大行数 |
-
-- **密码走凭据服务**：页面上的密码框是只写的，输入后经 `credentials/set` 写入凭据存储（引用名即 `passwordEnv`），设置文档里只有引用名，返回值里永远没有密码字面量。页面只显示「已配置 / 未配置」。
-- **改动立即生效**：每次工具调用与连接探测都重新读取设置，连接身份变化时连接池被替换，不需要重启插件。
-- **测试连接**：页面上的「测试连接」调用插件自己挂在 `POST /api/ds-db/test` 的精确路由（走 `/api` 的鉴权栅栏：无 cookie 返回 401），Host 侧用当前保存的连接执行版本查询，成功显示版本与耗时，失败显示服务器的原始拒绝信息。
-
-同名值可以来自三层：schema 默认值 → 组合层（`cordis.yml` 里该行的 `config`）→ 用户层（配置页面）。用户层里「存在」即视为已覆盖，页面会打「已覆盖」标记并提供「恢复默认」。
-
-### cordis.yml 配置
+组合层可以只写平铺字段（得到一条默认连接），也可以预置多条：
 
 ```yaml
 - insert:
     - id: ds-db
       name: 'dsh-ds-db'
       config:
-        # 组合层字段，不在配置页上：选用注册表里的哪个方言（默认本插件自带的 mysql）
-        dialect: mysql
-        host: db.internal
-        port: 3306
-        user: dsh_reader
-        database: app
-        passwordEnv: DSH_MYSQL_PASSWORD
-        connectTimeoutMs: 10000
-        queryTimeoutMs: 30000
-        maxRows: 200
+        connections:
+          - id: app
+            name: 业务库
+            dialect: mysql
+            host: db.internal
+            port: 3306
+            user: dsh_reader
+            database: app
+            passwordEnv: DSH_MYSQL_PASSWORD
+            connectTimeoutMs: 10000
+            queryTimeoutMs: 30000
+            maxRows: 200
+            extra: {}          # 该方言专属字段
+        activeId: app
 ```
 
-`dialect` 与其余字段一样可选，缺省即本插件自带的 `mysql`。字段全部可选；缺省即用上表默认值。补丁按行整块替换 `config`，覆盖时请写全要保留的键。
-
-## 模型可见的工具
-
-| 工具 | 作用 |
-| --- | --- |
-| `db_databases` | 列出可见的库（字符集/排序规则），默认隐藏 `information_schema`/`mysql`/`performance_schema`/`sys` |
-| `db_tables` | 列出某个库的表与视图（类型、引擎、行数估算、表注释） |
-| `db_describe` | 描述一张表：列（类型/可空/默认值/键/extra/注释）、索引（唯一性/类型/列序）、`SHOW CREATE TABLE` 原文 |
-| `db_query` | 执行**一条**只读语句，返回列名与行（JSON） |
-
-工具名用中立的 `db_` 前缀（不是 `mysql_`）：它们服务的是配置里选中的那个方言，具体连到哪种库由各自的 description 说明（例如 `db_query` 的描述会写 "Run one read-only MySQL statement…"，换方言后自动变成该方言的自称）。
-
-`db_query` 的语句判定（结构在 `src/sql-guard.ts`，规则由方言给出）：
-
-1. 先做词法掩码：字符串字面量清空、注释剔除——字面量或注释里的分号与关键字不参与判定。引号字符、注释标记、是否允许反斜杠转义都由方言声明（MySQL 里 `#` 是注释，PostgreSQL 里它是运算符，这类差异不会互相污染）。
-2. 只放行方言声明的语句族打头的**单条**语句（MySQL：`SELECT` / `SHOW` / `DESCRIBE` / `EXPLAIN` / `TABLE` / `VALUES`）；分号结尾会被去掉。
-3. 拒绝「看着只读、实际会写或加锁」的写法。MySQL 的清单是 `INTO OUTFILE` / `INTO DUMPFILE`、`FOR UPDATE`、`LOCK IN SHARE MODE`、`PROCEDURE ANALYSE`（注释穿插的写法同样会被识破，因为判定走掩码后的文本；`FOR UPDATE` 这对是各方言共用的）。
-4. 行数上界由方言拼：MySQL 追加 `LIMIT maxRows + 1`；返回时统一截断到 `maxRows` 并标记 `truncated`。
-
-结果值统一投影为无损 JSON（`Date` → ISO 字符串，`bigint`/`DECIMAL` 保持字符串，`Buffer` 转为有上界的十六进制预览），因为工具结果必须是 JSON 可重建的。
+补丁按行整块替换 `config`，覆盖时请写全要保留的键。
 
 ### 只读姿态的三层
 
-1. `sql-guard.ts` 的语句判定（插件内，最先执行，规则来自方言）；
-2. 方言自己的协议层约束——MySQL 是连接池 `multipleStatements: false` 与每语句超时；
-3. **部署方的只读账号**——前两层是插件内的约束，只有第三层能挡住未来可能出现的绕过。
+1. `sql-guard.ts` 的语句判定（插件内，最先执行，规则来自方言）
+2. 方言自己的协议层约束（MySQL 是 `multipleStatements: false` 与每语句超时）
+3. **部署方的只读账号**——前两层是插件内的约束，只有第三层能挡住未来可能出现的绕过
 
-## 命令
+## 给方言作者：增加一种数据库类型
 
-```sh
-npm run build        # 构建 host 与浏览器半边（`prepare` 钩子在安装时也会调用它）
-npm run typecheck    # tsc 类型检查（harness 依赖按已构建的 .d.ts 解析）
-npm test             # 单元测试（18 例）：语句判定 + MySQL 方言的语法/语句/投影
-npm run overlay      # 生成 .dev/cordis.yml
+**你不需要改本仓库。** 发一个包，注册一个方言，4 个既有工具立刻就能跑在你的数据库上，设置页也会出现你的数据库类型。
 
-# host 半边组合自检：挂到真实 ToolRuntime 上，断言工具注册、描述文本与拒绝文本
-# 逐一比对重构前的字符串，并验证一个「加载后才注册」的第二个方言能跑通全部工具
-npm run verify:host
+### 它为什么能这样工作
+
+```
+你的包 ──inject: ['databaseDialects']──▶ ctx.databaseDialects.register(你的方言)
+                                                  │
+本插件的 4 个工具 ─────────────────────────────────┘（每次调用重新解析当前方言）
 ```
 
-`verify:host` 依赖同一个 checkout 旁的 `deepseek-harness`（`tsconfig.json` 的 `paths` 把 `@deepseek-ai/*` 指向 harness 源码），因此它在这台机器上是自包含的，换机器需要同步调整 `paths`。
+- 注册表由本插件提供，注册是 effect，返回 disposer
+- 工具每次调用都重新解析连接与方言，所以你的方言晚于插件加载也能立刻生效
+- 唯一的滞后：工具**描述文案**在注册时写定，你的方言自称要等插件重载后才出现在描述里——**不影响调用**
+
+### 五步做出来
+
+**第 1 步：建包**
+
+```json
+{
+  "name": "dsh-dialect-clickhouse",
+  "type": "module",
+  "main": "lib/index.js",
+  "peerDependencies": { "dsh-ds-db": ">=0.2.0" },
+  "dependencies": { "clickhouse-client": "^1.0.0" },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}
+```
+
+**第 2 步：注册**
+
+```ts
+import type { Context } from '@deepseek-ai/cordis'
+
+export const name = 'dialect-clickhouse'
+export const inject = ['databaseDialects']
+
+export function apply(ctx: Context): void {
+  ctx.effect(() => ctx.databaseDialects.register(CLICKHOUSE_DIALECT), 'clickhouse dialect')
+}
+```
+
+配套 `cordis.patch.yml`（让 Loader 加载你这个包）：
+
+```yaml
+- insert:
+    - id: dialect-clickhouse
+      name: 'dsh-dialect-clickhouse'
+```
+
+**第 3 步：实现 `DatabaseDialect`**
+
+这是全部工作量所在。完整契约见 [`docs/04_API_Docs/方言扩展_API.md`](docs/04_API_Docs/方言扩展_API.md)，要点如下：
+
+| 成员 | 你要提供什么 |
+| --- | --- |
+| `name` / `label` | 注册表键与模型可见的自称 |
+| `rules` | **只读红线**：词法（引号字符、注释标记、是否允许反斜杠转义）+ 放行的语句族 + 禁止项（看着只读实则会写或加锁的写法） |
+| `open(connection)` | 用你的驱动开一个会话，实现 `run(statement)` 与 `close()` |
+| `applyRowLimit(sql, n)` | 保证「忘记写上限也不会把整表灌进模型上下文」 |
+| `quoteIdentifier(name)` | 挡住带引号字符的标识符 |
+| `databases/tables/columns/indexes/createStatement/version` | 元数据查询**及其行投影**：列名是你自己的，`project` 负责映射，工具层永远不读列名 |
+| `rowBoundHint` / `systemDatabases` | 模型文案需要的事实：上界怎么写、哪些是系统库 |
+
+**第 4 步：如实声明能力与专属字段**
+
+```ts
+capabilities: new Set(['databases', 'tables', 'columns', 'indexes', 'estimatedRows', 'version']),
+configFields: [{ key: 'sslMode', kind: 'text', default: 'disable', required: false, label: 'SSL mode' }],
+```
+
+- **缺什么能力就别声明什么**：能力缺失时工具会降级（`db_describe` 省略建表语句、索引为空、行数估算为 `null`、字符集为空串），而不是去跑一条你的库没有的 SQL。这是契约的一部分，不是异常
+- `configFields` 的值存进连接的 `extra`，设置页会为你的方言渲染这些字段
+- 声明 `sample` / `explain` 就必须实现同名方法，否则注册直接抛错
+
+**第 5 步：自检**
+
+```ts
+import { auditDialect } from 'dsh-ds-db/src/dialect-audit.ts'
+
+const problems = auditDialect(YOUR_DIALECT)   // 空数组 = 通过
+```
+
+覆盖：只读判定（含「字面量/注释里的分号」这类绕过）、行数上界、标识符引用、各元数据投影、能力与实现一致性、字段默认值类型。**不需要数据库服务**。
+
+### 从模板开始
+
+[`examples/dsh-dialect-postgres/`](examples/dsh-dialect-postgres/) 是完整可用的 PostgreSQL 方言，直接复制改：
+
+```sh
+cd examples/dsh-dialect-postgres
+npm install --legacy-peer-deps
+npm run verify     # 契约审计，无需 PostgreSQL 服务
+```
+
+它本身就是「能力缺失如何降级」的范例：PostgreSQL 没有内置的 `SHOW CREATE TABLE` 等价物，所以它不声明 `createStatement`。
+
+### 常见坑
+
+| 现象 | 原因 |
+| --- | --- |
+| 装不上，报找不到 `dsh-ds-db` | 它还没发布到 npm，安装时加 `--legacy-peer-deps` |
+| 调用报「dialect X is not registered」 | 你的包没被加载；用 `dsh --dump-config` 确认那一层在 |
+| 工具描述里还是旧的自称 | 已知行为：描述注册时写定，重载后更新；**调用不受影响** |
+| 设置页没出现我的类型 | 页面从 `GET /api/ds-db/dialects` 读注册表；确认你的方言注册成功 |
+| 改了浏览器侧内容没生效 | 浏览器半边是构建产物，必须重新 build |
+
+## 给插件开发者：本地开发
+
+```sh
+pnpm install --no-frozen-lockfile   # 或 npm install --legacy-peer-deps
+npm run typecheck      # tsc 类型检查（harness 依赖按其构建的 .d.ts 解析）
+npm test               # 单元测试（24 例）：只读判定 + MySQL 方言 + 方言契约审计
+npm run verify:host    # 挂真实 ToolRuntime：工具注册、描述文本、拒绝文本、能力降级
+npm run build          # host 与浏览器半边
+npm run overlay        # 生成 .dev/cordis.yml
+```
+
+启动冒烟：
+
+```sh
+cd ../deepseek-harness
+pnpm dsh web --patch <插件目录>/.dev/cordis.yml
+```
+
+`verify:host` 与源码态启动都依赖同 checkout 旁的 `deepseek-harness`（`tsconfig.json` 的 `paths` 把 `@deepseek-ai/*` 指过去），换机器需同步调整 `paths`。
+
+改动落在哪一层：
+
+- 加数据库类型 → **不要改本仓库**，发方言包
+- 加工具 → `src/tools.ts`；若需要方言提供底层查询，先加能力键再在方言里实现
+- 改设置页 → `src/client/`（改完必须 `npm run build`）
+- 改组合/配置 → `src/settings.ts` + `src/contract.ts`
 
 ## 已知限制 / 暂未实现
 
-- **只有 MySQL 一个方言**：seam 已就位（见上），但 PostgreSQL / Oracle 尚未实现。加 PostgreSQL 便宜（`information_schema` 大体可移植、`LIMIT` 同样存在、`?`→`$n` 是机械替换，主要重写 `SHOW CREATE TABLE` 的替代）；加 Oracle 贵（无 `LIMIT`、无 `information_schema`、SID 与 service name 是两种连法、`DBMS_METADATA` 常需额外授权、`oracledb` 是重量级原生依赖），建议单独评估。
-- **配置页字段仍是 MySQL 形状**：`host/port/user/database` 与默认端口 3306。Oracle 需要 service name 之类的字段时，要同时改 `settings.ts`、`contract.ts`、配置页与字典。
-- **客户端字典命名空间与内部标识符仍带 MySQL 字样**：工具名（`db_*`）、设置命名空间（`ds-db`）、探测路由（`/api/ds-db/test`）、包名与插件行 id 都已中立，但客户端字典命名空间仍是 `settings.mysql`，TS 内部标识符（`MysqlSettings`、`MysqlSettingsPage`、`MYSQL_SETTINGS_NAMESPACE` 等常量名）也保持原样——它们不对外暴露，改名属纯内部重构。配置页的导航标题也仍是「MySQL」，因为它配的就是默认方言的连接。
-- **不做 TLS/SSL 选项**：连接固定走 `mysql2` 默认（无 TLS）。需要 TLS 的远端库要额外加配置字段（schema、cordis.yml、配置页各一处）。
-- **单个连接身份**：一个插件实例只服务一份连接配置，没有多数据源切换；`dialect` 是选择一个方言，不是并联多个库。
-- **没有采样数据与执行计划工具**：`EXPLAIN` 目前只能通过 `db_query` 手写（工具集按需求只包含库表清单、表结构、查询三类能力）。
-- **没有查询结果卡片**：工具结果走通用呈现，没有做 Web 侧专用卡片。
-- **浏览器半边需要重新构建**：它是构建产物（`lib/client.js`），改 `src/client` 后必须 `npm run build`，Host 侧源码态改动则随 `tsx` 热加载。
-- 作为仓外插件，它不参与 `deepseek-harness` 仓库的 gate（每文件 100% 覆盖率、双语 README 配对、生成物目录等）；`typecheck`、`npm test` 与 `scripts/verify-host.mjs` 是本工程自带的检查。
+- **内置方言只有 MySQL**：PostgreSQL 以仓外示例包形式提供（`examples/`），Oracle 未实现。加 PostgreSQL 便宜；加 Oracle 贵（无 `LIMIT`、无 `information_schema`、SID 与 service name 两种连法、`oracledb` 是重量级原生依赖），建议单独评估
+- **打包版 dsh 上的 `dsh plugin add` 安装实测未完成**：声明已补齐，缺真实打包环境验证
+- **配置字段是「通用字段 + `extra`」**：Oracle 这类需要 service name 的库可以表达；但 SQLite 这类没有 host/port 概念的库仍会看到多余字段，届时升级为「字段完全由方言声明」（见 [`docs/05_Docs/decisions/`](docs/05_Docs/decisions/)）
+- **客户端字典命名空间与部分内部标识符仍带 MySQL 字样**：工具名（`db_*`）、设置命名空间（`ds-db`）、路由（`/api/ds-db/*`）都已中立；字典命名空间 `settings.mysql` 与若干 TS 标识符不对外暴露，改名属纯内部重构
+- **没有查询结果卡片与调用卡片**：工具结果走通用呈现
+- **浏览器半边需要重新构建**：改 `src/client` 后必须 `npm run build`
+- 作为仓外插件，它不参与 `deepseek-harness` 仓库的 gate（每文件 100% 覆盖率等）；`typecheck`、`npm test`、`verify:host` 是本工程自带的检查
 
 ## 许可
 
