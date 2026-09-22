@@ -56,7 +56,7 @@ function optionalArgument(value: string | undefined): string | undefined {
 function resolveDatabase(settings: MysqlSettings, requested: string | undefined, dialect: DatabaseDialect): string {
   const database = optionalArgument(requested) ?? optionalArgument(settings.database)
   if (database === undefined) {
-    throw new Error(`no database selected: pass a database argument or set a default database on the ${dialect.label} settings page`)
+    throw new Error(`no database selected: pass a database argument or set the default database of the connection in use on the database settings page`)
   }
   return database
 }
@@ -119,7 +119,7 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
     name: 'db_tables',
     description: `List the tables and views of one ${described.label} database, with engine, row-count estimate, and table comment.`,
     parameters: {
-      database: { type: 'string', description: `Database to list. Defaults to the database configured on the ${described.label} settings page.` },
+      database: { type: 'string', description: 'Database to list. Defaults to the default database of the connection in use.' },
     },
     output: {
       schema: {
@@ -165,7 +165,7 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
     description: `Describe one ${described.label} table: its columns, its indexes, and the statement that creates it.`,
     parameters: {
       table: { type: 'string', required: true, description: 'Table or view to describe.' },
-      database: { type: 'string', description: `Database holding the table. Defaults to the database configured on the ${described.label} settings page.` },
+      database: { type: 'string', description: 'Database holding the table. Defaults to the default database of the connection in use.' },
     },
     output: {
       schema: {

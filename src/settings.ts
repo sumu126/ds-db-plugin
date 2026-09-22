@@ -1,14 +1,19 @@
 /**
- * Host-side MySQL settings: the Schemastery schema the configuration page
- * renders and the composition entry the namespace falls back to when no
- * settings provider is mounted.
+ * Host-side settings: the Schemastery schema the configuration page renders,
+ * and the composition entry the namespace falls back to when no settings
+ * provider is mounted.
+ *
+ * The composition layer keeps the flat single-connection shape it has always
+ * had: a deployment that configures nothing gets one MySQL connection on
+ * localhost, and a deployment that names fields in `cordis.yml` gets that one
+ * connection with its values. A deployment that wants several connections
+ * preprovisions them with `connections`.
  *
  * @module dsh-ds-db/src/settings
  */
 
 import z from '@deepseek-ai/schemastery'
-import { DEFAULT_PASSWORD_REF } from './contract.ts'
-import type { MysqlSettings } from './contract.ts'
+import { DEFAULT_CONNECTION_ID, DEFAULT_PASSWORD_REF, type DatabaseSettings, type MysqlSettings } from './contract.ts'
 
 /**
  * Connection values a deployment that configures nothing gets. They point at a
@@ -16,6 +21,9 @@ import type { MysqlSettings } from './contract.ts'
  * remote host.
  */
 export const MYSQL_DEFAULTS: MysqlSettings = {
+  id: DEFAULT_CONNECTION_ID,
+  name: 'MySQL',
+  dialect: 'mysql',
   host: '127.0.0.1',
   port: 3306,
   user: 'root',
@@ -26,18 +34,36 @@ export const MYSQL_DEFAULTS: MysqlSettings = {
   maxRows: 200,
 }
 
+/** Credential-reference shape, shared by every schema that carries one. */
+const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+/** One saved connection, as a settings section item or a `connections` entry. */
+export const ProfileSchema: z<MysqlSettings> = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  dialect: z.string().min(1),
+  host: z.string().min(1),
+  port: z.natural().max(65535),
+  user: z.string().min(1),
+  database: z.string(),
+  passwordEnv: z.string().pattern(IDENTIFIER),
+  connectTimeoutMs: z.natural().min(1),
+  queryTimeoutMs: z.natural().min(1),
+  maxRows: z.natural().min(1),
+})
+
 /**
  * Composition configuration of the `ds-db` row in `cordis.yml`.
  *
- * Every field is deployment-varying, so none of them is a constant in the
- * plugin body: these are the values the MySQL settings page overrides per user.
+ * The flat fields describe the single connection a deployment gets by default;
+ * `connections` replaces them with a preprovisioned list.
  */
 export interface Config {
-  /** MySQL server host name or address. @default '127.0.0.1' */
+  /** Server host name or address. @default '127.0.0.1' */
   host?: string
-  /** MySQL server TCP port. @default 3306 */
+  /** Server TCP port. @default 3306 */
   port?: number
-  /** MySQL account the plugin connects as. @default 'root' */
+  /** Account the plugin connects as. @default 'root' */
   user?: string
   /** Default database; empty means every tool call names one. @default '' */
   database?: string
@@ -49,11 +75,12 @@ export interface Config {
   queryTimeoutMs?: number
   /** Maximum rows one `db_query` call returns. @default 200 */
   maxRows?: number
-  /**
-   * Registered database dialect this row addresses. Defaults to this plugin's
-   * own dialect; name another one to run the same tools against it.
-   */
+  /** Registered database dialect the flat connection addresses. @default 'mysql' */
   dialect?: string
+  /** Saved connections a deployment preprovisions; the flat fields are ignored when present. */
+  connections?: MysqlSettings[]
+  /** The connection the tools address by id; defaults to the first saved one. */
+  activeId?: string
 }
 
 /** Validated composition configuration. */
@@ -62,21 +89,21 @@ export const Config: z<Config> = z.object({
   port: z.natural().max(65535),
   user: z.string().min(1),
   database: z.string(),
-  passwordEnv: z.string().pattern(/^[A-Za-z_][A-Za-z0-9_]*$/),
+  passwordEnv: z.string().pattern(IDENTIFIER),
   connectTimeoutMs: z.natural().min(1),
   queryTimeoutMs: z.natural().min(1),
   maxRows: z.natural().min(1),
   dialect: z.string().min(1),
+  connections: z.array(ProfileSchema),
+  activeId: z.string(),
 })
 
-/**
- * The settings section a deployment that mounts no settings provider still
- * runs on: the composition values over the built-in defaults.
- * @param config - the validated composition configuration.
- * @returns the complete section the namespace resolves to.
- */
-export function compositionEntry(config: Config): MysqlSettings {
+/** The flat connection the composition fields describe. */
+function flatConnection(config: Config): MysqlSettings {
   return {
+    id: DEFAULT_CONNECTION_ID,
+    name: MYSQL_DEFAULTS.name,
+    dialect: config.dialect ?? MYSQL_DEFAULTS.dialect,
     host: config.host ?? MYSQL_DEFAULTS.host,
     port: config.port ?? MYSQL_DEFAULTS.port,
     user: config.user ?? MYSQL_DEFAULTS.user,
@@ -89,19 +116,32 @@ export function compositionEntry(config: Config): MysqlSettings {
 }
 
 /**
- * The User Settings section the MySQL page edits.
- *
- * Defaults mirror {@link MYSQL_DEFAULTS} so the page renders the same values a
- * deployment gets before anyone edits anything; the composition entry is what
- * actually supplies them once a provider is mounted.
+ * The settings section a deployment that mounts no settings provider still
+ * runs on: the preprovisioned connections, else the one the flat fields
+ * describe, with the active id the configuration names or the first connection.
+ * @param config - the validated composition configuration.
+ * @returns the complete section the namespace resolves to.
  */
-export const MysqlSettingsSchema: z<MysqlSettings> = z.object({
-  host: z.string().min(1).default(MYSQL_DEFAULTS.host),
-  port: z.natural().max(65535).default(MYSQL_DEFAULTS.port),
-  user: z.string().min(1).default(MYSQL_DEFAULTS.user),
-  database: z.string().default(MYSQL_DEFAULTS.database),
-  passwordEnv: z.string().pattern(/^[A-Za-z_][A-Za-z0-9_]*$/).default(MYSQL_DEFAULTS.passwordEnv),
-  connectTimeoutMs: z.natural().min(1).default(MYSQL_DEFAULTS.connectTimeoutMs),
-  queryTimeoutMs: z.natural().min(1).default(MYSQL_DEFAULTS.queryTimeoutMs),
-  maxRows: z.natural().min(1).default(MYSQL_DEFAULTS.maxRows),
+export function compositionEntry(config: Config): DatabaseSettings {
+  const connections = config.connections !== undefined && config.connections.length > 0
+    ? config.connections
+    : [flatConnection(config)]
+  const first = connections[0]
+  if (first === undefined) return { connections: [], activeId: '' }
+  const requested = config.activeId
+  const activeId = requested !== undefined && connections.some(profile => profile.id === requested)
+    ? requested
+    : first.id
+  return { connections, activeId }
+}
+
+/**
+ * The User Settings section the database page edits.
+ *
+ * The page writes complete records: every connection it saves carries all
+ * fields, so the section schema validates strictly rather than defaulting.
+ */
+export const DatabaseSettingsSchema: z<DatabaseSettings> = z.object({
+  connections: z.array(ProfileSchema),
+  activeId: z.string(),
 })

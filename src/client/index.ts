@@ -15,9 +15,11 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 // Type-only: pulls the ctx.remote merge (the generated remote namespaces).
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
-import { MYSQL_SETTINGS_NAMESPACE, MYSQL_TEST_PATH, type MysqlSettings } from '../contract.ts'
-import { MysqlSettingsController, type MysqlCredentialsFace, type MysqlPageFace, type MysqlProbe } from './form.ts'
-import { MysqlSettingsPage } from './MysqlSettingsPage.tsx'
+import type { DbPageFace, DbProbe } from './form.ts'
+import { DatabaseSettingsController, type MysqlCredentialsFace } from './form.ts'
+import { DatabaseSettingsPage } from './DatabaseSettingsPage.tsx'
+import { MYSQL_SETTINGS_NAMESPACE, MYSQL_TEST_PATH, type DatabaseSettings, type MysqlSettings, type ProbeRequest } from '../contract.ts'
+
 import { en, zh, type MysqlLocaleKey } from './locales.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -42,7 +44,7 @@ export const inject = [
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-ds-db: copy dictionaries')
 
-  const scope = ctx.settingsScope.bind<MysqlSettings>({ namespace: MYSQL_SETTINGS_NAMESPACE })
+  const scope = ctx.settingsScope.bind<DatabaseSettings>({ namespace: MYSQL_SETTINGS_NAMESPACE })
   const credentials: MysqlCredentialsFace = {
     // A refused describe is reported as "nothing stored, still writable": the
     // control stays usable and the Host is what refuses, rather than the page
@@ -55,7 +57,7 @@ export function apply(ctx: ClientContext): void {
     },
     set: async (ref, value) => { await ctx.remote.credentials.set(ref, value) },
   }
-  const controller = new MysqlSettingsController(scope, credentials, probeConnection)
+  const controller = new DatabaseSettingsController(scope, credentials, probeConnection)
   const t = ctx.locale.bind(NS)
 
   ctx.slots.inject('settings.section', () => ctx.slots.register({
@@ -66,20 +68,25 @@ export function apply(ctx: ClientContext): void {
     order: 40,
     label: () => t('nav'),
     locale: NS,
-    inject: (): MysqlPageFace => ({ hooks: { mysqlPage: controller.snapshot }, ...controller.actions() }),
-  }, MysqlSettingsPage))
+    inject: (): DbPageFace => ({ hooks: { dbPage: controller.snapshot }, ...controller.actions() }),
+  }, DatabaseSettingsPage))
 }
 
 /**
- * Probe the saved connection over the plugin's own authenticated API route.
+ * Probe a connection over the plugin's own authenticated API route: an
+ * unsaved draft, a saved id, or the connection the tools currently address.
+ * @param request - what the page asks the Host to probe.
  * @returns the probe outcome; a transport failure is a failed probe, not a throw.
  */
-async function probeConnection(): Promise<MysqlProbe> {
+async function probeConnection(request: ProbeRequest): Promise<DbProbe> {
+  const body: { id?: string, profile?: MysqlSettings } = {}
+  if (request.id !== undefined) body.id = request.id
+  if (request.profile !== undefined) body.profile = request.profile
   try {
     const response = await fetch(MYSQL_TEST_PATH, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: '{}',
+      body: JSON.stringify(body),
     })
     if (!response.ok) return { status: 'failed', message: `HTTP ${String(response.status)}` }
     const payload = await response.json() as { ok?: unknown; version?: unknown; latencyMs?: unknown; message?: unknown }

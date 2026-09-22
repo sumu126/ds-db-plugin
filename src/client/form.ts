@@ -1,11 +1,11 @@
 /**
- * Staged form model behind the MySQL settings page.
+ * Staged form model behind the database settings page.
  *
- * A page edit is a draft: nothing is written to the Host until the user saves,
- * because every settings write is a durable revision-fenced document mutation.
- * The password control is the one draft that is not part of the section — it is
- * written through the credential domain, keyed by the reference the section
- * names, and never read back.
+ * The durable truth is the settings section: the saved connections and the one
+ * the tools address. A dialog edit is a draft that becomes a whole-list write
+ * when the user saves. The password is the one draft that never reaches the
+ * section: it is written through the credential domain, keyed by the reference
+ * the profile names, and never read back.
  *
  * @module dsh-ds-db/src/client/form
  */
@@ -13,96 +13,117 @@
 import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { SettingsPathOpView } from '@deepseek-ai/dsh-api-remotes/client'
 import type { SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client'
-import { DEFAULT_PASSWORD_REF, MYSQL_SETTINGS_FIELDS, type MysqlSettings, type MysqlSettingsField } from '../contract.ts'
+import { type DatabaseSettings, type MysqlSettings } from '../contract.ts'
 
-/** What one field's saved draft performs. */
-type FieldWrite = { kind: 'set'; value: string | number } | { kind: 'clear' }
+/** One editable field of the connection dialog, in form order. */
+export type DbFormField
+  = 'name' | 'host' | 'port' | 'user' | 'database'
+  | 'passwordEnv' | 'connectTimeoutMs' | 'queryTimeoutMs' | 'maxRows'
 
-/** How one field converts between its stored value and its draft text. */
-interface FieldSpec {
-  /** Render the effective value as draft text. */
-  format: (value: MysqlSettings) => string
-  /** The write this draft performs, or undefined when the field cannot accept it. */
-  parse: (text: string) => FieldWrite | undefined
-}
+/** Every field the dialog renders, in form order. */
+export const DB_FORM_FIELDS: readonly DbFormField[] = [
+  'name', 'host', 'port', 'user', 'database', 'passwordEnv',
+  'connectTimeoutMs', 'queryTimeoutMs', 'maxRows',
+]
 
-/** One field as the page renders it. */
-export interface MysqlFieldState {
-  /** Draft text the control shows. */
-  text: string
-  /** Whether saving would leave a user-layer entry for this field. */
-  overridden: boolean
-  /** Whether the draft is not a value this field accepts, which blocks the save. */
-  invalid: boolean
-}
-
-/** The connection probe's state, owned by the page's Test button. */
-export type MysqlProbe =
+/** The connection probe's state, owned by a card's or the dialog's Test button. */
+export type DbProbe =
   | { status: 'idle' }
   | { status: 'running' }
   | { status: 'ok'; version: string; latencyMs: number }
   | { status: 'failed'; message: string }
 
+/** One saved connection as a card renders it. */
+export interface ConnectionCard {
+  profile: MysqlSettings
+  /** Whether the tools currently address this connection. */
+  active: boolean
+  /** Whether the Host reports a stored value for this profile's reference. */
+  passwordConfigured: boolean
+  /** The last probe of the saved connection. */
+  probe: DbProbe
+}
+
+/** The connection dialog: the type chooser, or one profile's form. */
+export type DbDialog =
+  | { kind: 'closed' }
+  | { kind: 'type' }
+  | {
+    kind: 'form'
+    /** Whether saving adds a connection or replaces one. */
+    mode: 'new' | 'edit'
+    /** The id the profile is saved under; a fresh one for `new`. */
+    id: string
+    /** The dialect chosen in the type step. */
+    dialect: string
+    /** Draft text per form field. */
+    fields: Record<DbFormField, string>
+    /** The write-only password draft. */
+    password: string
+    /** The last probe of this draft. */
+    probe: DbProbe
+  }
+
 /** Everything the page renders. */
-export interface MysqlPageState {
+export interface DatabasePageState {
   /** False until the Host serves this settings namespace. */
   available: boolean
   /** Whether the Host settings document accepts writes. */
   writable: boolean
-  /** Whether the form holds edits a save would write. */
-  dirty: boolean
-  /** Whether any draft is not a value its field accepts, which blocks the save. */
-  invalid: boolean
   /** Whether a save is crossing the wire. */
   saving: boolean
-  /** Whether the last save did not land as staged; cleared by the next edit or save. */
+  /** Whether the last save did not land as staged; cleared by the next save. */
   failed: boolean
-  /** One state per connection field, in page order. */
-  fields: Record<MysqlSettingsField, MysqlFieldState>
-  /** The write-only password control. */
-  password: {
-    /** Draft text; always blank on load because no response carries the literal. */
-    text: string
-    /** Whether the Host reports a stored value for the reference. */
-    configured: boolean
-    /** Whether the credential store accepts a write for it. */
-    writable: boolean
-  }
-  /** The last connection probe. */
-  probe: MysqlProbe
+  /** The saved connections as cards, in document order. */
+  cards: ConnectionCard[]
+  /** The dialog, when one is open. */
+  dialog: DbDialog
 }
 
 /** The credential-domain face the page writes and describes through. */
 export interface MysqlCredentialsFace {
-  /** Presence and writability facts for one reference; never its value. */
   describe: (ref: string) => Promise<{ configured: boolean; writable: boolean }>
-  /** Store one literal under one reference. */
   set: (ref: string, value: string) => Promise<void>
 }
 
 /** Write actions the page's slot entry injects. */
-export interface MysqlFormActions {
-  /** Stage draft text for one field. */
-  edit: (field: MysqlSettingsField, text: string) => void
-  /** Stage a clear, so saving lets the field re-inherit the composition layer. */
-  resetField: (field: MysqlSettingsField) => void
-  /** Stage the password literal. */
+export interface DbFormActions {
+  openNew: () => void
+  /** Open the dialog on a pre-filled draft, for editing a saved connection. */
+  openEdit: (draft: DbDialog) => void
+  closeDialog: () => void
+  chooseDialect: (dialect: string) => void
+  editField: (field: DbFormField, text: string) => void
   editPassword: (text: string) => void
-  /** Write every staged edit, then re-seed from what the Host accepted. */
-  save: () => void
-  /** Drop every staged edit. */
-  discard: () => void
-  /** Probe the saved connection. */
-  test: () => void
+  testDraft: () => void
+  saveDialog: () => void
+  activate: (id: string) => void
+  testSaved: (id: string) => void
+  remove: (id: string) => void
 }
 
 /** Everything the page's slot entry injects. */
-export interface MysqlPageFace extends MysqlFormActions {
+export interface DbPageFace extends DbFormActions {
   hooks: {
-    /** Page snapshot, bound by the renderer as `useMysqlPage`. */
-    mysqlPage: SnapshotStore<MysqlPageState>
+    /** Page snapshot, bound by the renderer as `useDbPage`. */
+    dbPage: SnapshotStore<DatabasePageState>
   }
 }
+
+/** One offering of the type chooser. */
+export interface DialectOffering {
+  /** Registry key the connection is saved under. */
+  dialect: string
+  /** Whether the plugin can actually open a session for it. */
+  available: boolean
+}
+
+/** The type chooser's offerings; only the bundled dialect is selectable today. */
+export const DIALECT_OFFERINGS: readonly DialectOffering[] = [
+  { dialect: 'mysql', available: true },
+  { dialect: 'postgres', available: false },
+  { dialect: 'oracle', available: false },
+]
 
 /** Whether a draft text is a positive whole number. */
 function positiveInteger(text: string): number | undefined {
@@ -112,158 +133,205 @@ function positiveInteger(text: string): number | undefined {
   return value >= 1 ? value : undefined
 }
 
-/** The per-field conversion rules; the keys are the section's own field names. */
-const SPECS: Record<MysqlSettingsField, FieldSpec> = {
-  host: {
-    format: settings => settings.host,
-    parse: text => text.trim().length === 0 ? undefined : { kind: 'set', value: text.trim() },
+/** The validity rule per dialog field. */
+const RULES: Record<DbFormField, (text: string) => boolean> = {
+  name: text => text.trim().length > 0,
+  host: text => text.trim().length > 0,
+  port: (text) => {
+    const value = positiveInteger(text)
+    return value !== undefined && value <= 65535
   },
-  port: {
-    format: settings => String(settings.port),
-    parse: (text) => {
-      const value = positiveInteger(text)
-      return value === undefined || value > 65535 ? undefined : { kind: 'set', value }
-    },
-  },
-  user: {
-    format: settings => settings.user,
-    parse: text => text.trim().length === 0 ? undefined : { kind: 'set', value: text.trim() },
-  },
-  database: {
-    // An empty database is meaningful: it means every tool call names its own.
-    format: settings => settings.database,
-    parse: (text) => {
-      const trimmed = text.trim()
-      return trimmed.length === 0 ? { kind: 'clear' } : { kind: 'set', value: trimmed }
-    },
-  },
-  passwordEnv: {
-    format: settings => settings.passwordEnv,
-    parse: (text) => {
-      const trimmed = text.trim()
-      return /^[A-Za-z_][A-Za-z0-9_]*$/.test(trimmed) ? { kind: 'set', value: trimmed } : undefined
-    },
-  },
-  connectTimeoutMs: {
-    format: settings => String(settings.connectTimeoutMs),
-    parse: (text) => {
-      const value = positiveInteger(text)
-      return value === undefined ? undefined : { kind: 'set', value }
-    },
-  },
-  queryTimeoutMs: {
-    format: settings => String(settings.queryTimeoutMs),
-    parse: (text) => {
-      const value = positiveInteger(text)
-      return value === undefined ? undefined : { kind: 'set', value }
-    },
-  },
-  maxRows: {
-    format: settings => String(settings.maxRows),
-    parse: (text) => {
-      const value = positiveInteger(text)
-      return value === undefined ? undefined : { kind: 'set', value }
-    },
-  },
+  user: text => text.trim().length > 0,
+  // An empty database is meaningful: it means every tool call names its own.
+  database: () => true,
+  passwordEnv: text => /^[A-Za-z_][A-Za-z0-9_]*$/.test(text.trim()),
+  connectTimeoutMs: text => positiveInteger(text) !== undefined,
+  queryTimeoutMs: text => positiveInteger(text) !== undefined,
+  maxRows: text => positiveInteger(text) !== undefined,
+}
+
+/** The invalid-key copy each field refuses with. */
+export const FIELD_INVALID_KEY: Record<DbFormField, 'invalidText' | 'invalidNumber' | 'invalidReference'> = {
+  name: 'invalidText',
+  host: 'invalidText',
+  port: 'invalidNumber',
+  user: 'invalidText',
+  database: 'invalidText',
+  passwordEnv: 'invalidReference',
+  connectTimeoutMs: 'invalidNumber',
+  queryTimeoutMs: 'invalidNumber',
+  maxRows: 'invalidNumber',
+}
+
+/** Whether every dialog field holds a value its rule accepts. */
+export function dialogValid(dialog: DbDialog): boolean {
+  if (dialog.kind !== 'form') return false
+  return DB_FORM_FIELDS.every(field => RULES[field](dialog.fields[field]))
+}
+
+/** Whether one field's draft text is not a value its rule accepts. */
+export function fieldInvalid(field: DbFormField, text: string): boolean {
+  return !RULES[field](text)
+}
+
+/** The saved profile the dialog's draft parses to, or undefined while invalid. */
+export function dialogProfile(dialog: DbDialog): MysqlSettings | undefined {
+  if (dialog.kind !== 'form' || !dialogValid(dialog)) return undefined
+  return {
+    id: dialog.id,
+    name: dialog.fields.name.trim(),
+    dialect: dialog.dialect,
+    host: dialog.fields.host.trim(),
+    port: Number(dialog.fields.port.trim()),
+    user: dialog.fields.user.trim(),
+    database: dialog.fields.database.trim(),
+    passwordEnv: dialog.fields.passwordEnv.trim(),
+    connectTimeoutMs: Number(dialog.fields.connectTimeoutMs.trim()),
+    queryTimeoutMs: Number(dialog.fields.queryTimeoutMs.trim()),
+    maxRows: Number(dialog.fields.maxRows.trim()),
+  }
+}
+
+/** Draft text for one field, rendered from a saved profile. */
+function fieldText(profile: MysqlSettings, field: DbFormField): string {
+  switch (field) {
+    case 'name': return profile.name
+    case 'host': return profile.host
+    case 'port': return String(profile.port)
+    case 'user': return profile.user
+    case 'database': return profile.database
+    case 'passwordEnv': return profile.passwordEnv
+    case 'connectTimeoutMs': return String(profile.connectTimeoutMs)
+    case 'queryTimeoutMs': return String(profile.queryTimeoutMs)
+    case 'maxRows': return String(profile.maxRows)
+  }
+}
+
+/** A fresh dialog id for a connection the page is about to save. */
+function freshId(): string {
+  const uuid = globalThis.crypto?.randomUUID?.()
+  return uuid ?? `conn-${String(Date.now())}`
+}
+
+/** The empty draft text per field, for a new MySQL connection. */
+function blankFields(): Record<DbFormField, string> {
+  return {
+    name: 'MySQL',
+    host: '127.0.0.1',
+    port: '3306',
+    user: 'root',
+    database: '',
+    passwordEnv: 'DSH_MYSQL_PASSWORD',
+    connectTimeoutMs: '10000',
+    queryTimeoutMs: '30000',
+    maxRows: '200',
+  }
+}
+
+/** A draft dialog pre-filled from one saved profile, for the edit path. */
+export function editDraftFor(profile: MysqlSettings): DbDialog {
+  const fields = {} as Record<DbFormField, string>
+  for (const field of DB_FORM_FIELDS) fields[field] = fieldText(profile, field)
+  return {
+    kind: 'form', mode: 'edit', id: profile.id, dialect: profile.dialect,
+    fields, password: '', probe: { status: 'idle' },
+  }
 }
 
 /**
- * The staged form over one settings namespace.
- *
- * The scope is the single source of durable truth: drafts sit beside it, and
- * every projection is rebuilt from the two together, so a Host-side change
- * that lands while a draft is open keeps both facts visible.
+ * The staged form over one settings namespace. The scope is the single source
+ * of durable truth; the dialog, the probes, and the credential facts sit
+ * beside it, and every projection is rebuilt from them.
  */
-export class MysqlSettingsController {
-  private readonly store: SnapshotStore<MysqlPageState>
-  private readonly drafts = new Map<MysqlSettingsField, string>()
-  private passwordDraft = ''
-  private password = { ref: '', configured: false, writable: true }
-  private probeState: MysqlProbe = { status: 'idle' }
+export class DatabaseSettingsController {
+  private readonly store: SnapshotStore<DatabasePageState>
+  private readonly credentials = new Map<string, { configured: boolean; writable: boolean }>()
+  private readonly probes = new Map<string, DbProbe>()
+  private dialog: DbDialog = { kind: 'closed' }
   private saving = false
   private failed = false
 
-  /**
-   * @param scope - the bound scope for the MySQL settings namespace.
-   * @param credentials - the credential domain, addressed by the section's reference.
-   * @param probe - the Host's connection probe.
-   */
   constructor(
-    private readonly scope: SettingsScope<MysqlSettings>,
-    private readonly credentials: MysqlCredentialsFace,
-    private readonly probe: () => Promise<MysqlProbe>,
+    private readonly scope: SettingsScope<DatabaseSettings>,
+    private readonly credentialFace: MysqlCredentialsFace,
+    private readonly probe: (request: { id?: string, profile?: MysqlSettings }) => Promise<DbProbe>,
   ) {
     this.store = createSnapshotStore(this.projection())
     scope.subscribe(() => {
       this.publish()
-      void this.refreshCredential()
+      void this.refreshCredentials()
     })
-    void this.refreshCredential()
+    void this.refreshCredentials()
   }
 
   /** @returns the page's snapshot store. */
-  get snapshot(): SnapshotStore<MysqlPageState> {
+  get snapshot(): SnapshotStore<DatabasePageState> {
     return this.store
   }
 
   /** @returns the page's write actions. */
-  actions(): MysqlFormActions {
+  actions(): DbFormActions {
     return {
-      edit: (field, text) => {
-        this.drafts.set(field, text)
+      openNew: () => {
+        this.dialog = { kind: 'type' }
         this.failed = false
         this.publish()
       },
-      resetField: (field) => {
-        this.drafts.set(field, '')
+      openEdit: (draft) => {
+        if (draft.kind !== 'form') return
+        this.dialog = draft
+        this.failed = false
+        this.publish()
+      },
+      closeDialog: () => {
+        this.dialog = { kind: 'closed' }
+        this.failed = false
+        this.publish()
+      },
+      chooseDialect: (dialect) => {
+        if (this.dialog.kind !== 'type') return
+        this.dialog = {
+          kind: 'form', mode: 'new', id: freshId(), dialect,
+          fields: blankFields(), password: '', probe: { status: 'idle' },
+        }
+        this.publish()
+      },
+      editField: (field, text) => {
+        if (this.dialog.kind !== 'form') return
+        this.dialog = { ...this.dialog, fields: { ...this.dialog.fields, [field]: text }, probe: { status: 'idle' } }
         this.failed = false
         this.publish()
       },
       editPassword: (text) => {
-        this.passwordDraft = text
+        if (this.dialog.kind !== 'form') return
+        this.dialog = { ...this.dialog, password: text }
         this.failed = false
         this.publish()
       },
-      save: () => { void this.save() },
-      discard: () => { this.discard() },
-      test: () => { void this.test() },
+      testDraft: () => { void this.testDraft() },
+      saveDialog: () => { void this.saveDialog() },
+      activate: (id) => { void this.activate(id) },
+      testSaved: (id) => { void this.testSaved(id) },
+      remove: (id) => { void this.remove(id) },
     }
   }
 
-  private projection(): MysqlPageState {
+  private projection(): DatabasePageState {
     const snapshot = this.scope.getSnapshot()
     const value = snapshot.value
-    const user = isRecord(snapshot.user) ? snapshot.user : {}
-    const fields = {} as Record<MysqlSettingsField, MysqlFieldState>
-    for (const field of MYSQL_SETTINGS_FIELDS) {
-      const draft = this.drafts.get(field)
-      fields[field] = {
-        text: draft ?? (value === undefined ? '' : SPECS[field].format(value)),
-        overridden: draft === undefined
-          ? Object.hasOwn(user, field)
-          : SPECS[field].parse(draft)?.kind === 'set',
-        invalid: draft !== undefined && SPECS[field].parse(draft) === undefined,
-      }
-    }
-    const dirtyFields = MYSQL_SETTINGS_FIELDS.some((field) => {
-      const draft = this.drafts.get(field)
-      return draft !== undefined && (value === undefined || draft !== SPECS[field].format(value))
-    })
+    const connections = value?.connections ?? []
     return {
       available: snapshot.status === 'ready',
       writable: snapshot.writable,
-      dirty: dirtyFields || this.passwordDraft.trim().length > 0,
-      invalid: MYSQL_SETTINGS_FIELDS.some(field => this.drafts.get(field) !== undefined
-        && SPECS[field].parse(this.drafts.get(field) ?? '') === undefined),
       saving: this.saving,
       failed: this.failed,
-      fields,
-      password: {
-        text: this.passwordDraft,
-        configured: this.password.configured,
-        writable: this.password.writable,
-      },
-      probe: this.probeState,
+      cards: connections.map(profile => ({
+        profile,
+        active: profile.id === (value?.activeId ?? ''),
+        passwordConfigured: this.credentials.get(profile.passwordEnv)?.configured ?? false,
+        probe: this.probes.get(profile.id) ?? { status: 'idle' },
+      })),
+      dialog: this.dialog.kind === 'form' ? { ...this.dialog } : this.dialog,
     }
   }
 
@@ -271,32 +339,52 @@ export class MysqlSettingsController {
     this.store.set(this.projection())
   }
 
-  private discard(): void {
-    this.drafts.clear()
-    this.passwordDraft = ''
-    this.failed = false
+  /** Test the dialog's draft as it stands; an invalid draft is not sent. */
+  private async testDraft(): Promise<void> {
+    if (this.dialog.kind !== 'form' || this.dialog.probe.status === 'running') return
+    const profile = dialogProfile(this.dialog)
+    if (profile === undefined) return
+    this.dialog = { ...this.dialog, probe: { status: 'running' } }
     this.publish()
+    const probe = await this.probe({ profile })
+    if (this.dialog.kind === 'form' && this.dialog.id === profile.id) {
+      this.dialog = { ...this.dialog, probe }
+      this.publish()
+    }
   }
 
-  /** Write every staged edit, then re-seed from what the Host accepted. */
-  private async save(): Promise<void> {
-    const ops = this.stagedOps()
-    if (ops === undefined) return
+  /** Write the dialog's draft as a saved connection, then close the dialog. */
+  private async saveDialog(): Promise<void> {
+    if (this.dialog.kind !== 'form' || this.saving) return
+    const profile = dialogProfile(this.dialog)
+    if (profile === undefined) return
+    const draft = this.dialog
     this.saving = true
     this.publish()
     try {
-      if (this.passwordDraft.trim().length > 0) {
-        await this.credentials.set(this.reference(), this.passwordDraft.trim())
-        this.passwordDraft = ''
-        await this.refreshCredential()
-        if (!this.password.configured) throw new Error('the credential store did not keep the password')
+      const snapshot = this.scope.getSnapshot()
+      const current = snapshot.value?.connections ?? []
+      const connections = draft.mode === 'new'
+        ? [...current, profile]
+        : current.map(candidate => candidate.id === profile.id ? profile : candidate)
+      // The profile list is JSON-rebuildable, but its interface carries no index
+      // signature, so the whole-list write asserts the op's value type.
+      const ops: SettingsPathOpView[] = [{ op: 'set', path: ['connections'], value: connections } as unknown as SettingsPathOpView]
+      const activeId = snapshot.value?.activeId ?? ''
+      if (draft.mode === 'new' && !current.some(candidate => candidate.id === activeId)) {
+        ops.push({ op: 'set', path: ['activeId'], value: profile.id })
       }
-      if (ops.length > 0) await this.scope.mutate(ops)
-      this.drafts.clear()
+      if (draft.password.trim().length > 0) {
+        await this.credentialFace.set(profile.passwordEnv, draft.password.trim())
+        await this.refreshCredentials()
+      }
+      await this.scope.mutate(ops)
+      this.probes.delete(profile.id)
+      this.dialog = { kind: 'closed' }
       this.failed = false
     } catch {
       // The Host is the only authority on what it accepted: a refusal left the
-      // document as it was, so the page keeps the drafts and reports the failure.
+      // document as it was, so the dialog keeps its draft and reports the failure.
       this.failed = true
     } finally {
       this.saving = false
@@ -304,48 +392,55 @@ export class MysqlSettingsController {
     }
   }
 
-  /** The staged edits as path operations, or undefined while any draft is invalid. */
-  private stagedOps(): SettingsPathOpView[] | undefined {
-    const ops: SettingsPathOpView[] = []
-    for (const [field, draft] of this.drafts) {
-      const write = SPECS[field].parse(draft)
-      if (write === undefined) return undefined
-      ops.push(write.kind === 'clear'
-        ? { op: 'unset', path: [field] }
-        : { op: 'set', path: [field], value: write.value })
+  /** Address the tools at one saved connection. */
+  private async activate(id: string): Promise<void> {
+    try {
+      await this.scope.mutate([{ op: 'set', path: ['activeId'], value: id }])
+      this.failed = false
+    } catch {
+      this.failed = true
     }
-    return ops
-  }
-
-  /** Probe the saved connection; the outcome is a value the page renders. */
-  private async test(): Promise<void> {
-    this.probeState = { status: 'running' }
-    this.publish()
-    this.probeState = await this.probe()
     this.publish()
   }
 
-  /** The reference the password control writes to: the draft's, else the stored one. */
-  private reference(): string {
-    const draft = this.drafts.get('passwordEnv')
-    const parsed = draft === undefined ? undefined : SPECS.passwordEnv.parse(draft)
-    if (parsed !== undefined && parsed.kind === 'set' && typeof parsed.value === 'string') return parsed.value
-    return this.scope.getSnapshot().value?.passwordEnv ?? DEFAULT_PASSWORD_REF
-  }
-
-  /** Read whether the Host currently holds a value for the reference in force. */
-  private async refreshCredential(): Promise<void> {
-    const ref = this.reference()
-    const next = await this.credentials.describe(ref)
-    if (ref !== this.reference()) return
-    if (next.configured === this.password.configured && next.writable === this.password.writable
-      && ref === this.password.ref) return
-    this.password = { ref, configured: next.configured, writable: next.writable }
+  /** Probe one saved connection; the outcome is a value the card renders. */
+  private async testSaved(id: string): Promise<void> {
+    if (this.probes.get(id)?.status === 'running') return
+    this.probes.set(id, { status: 'running' })
+    this.publish()
+    const probe = await this.probe({ id })
+    this.probes.set(id, probe)
     this.publish()
   }
-}
 
-/** Whether a value is a plain record the user layer can be read from. */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
+  /** Delete one saved connection; the active id moves to the first survivor. */
+  private async remove(id: string): Promise<void> {
+    const snapshot = this.scope.getSnapshot()
+    const current = snapshot.value?.connections ?? []
+    const connections = current.filter(candidate => candidate.id !== id)
+    if (connections.length === current.length) return
+    const ops: SettingsPathOpView[] = [{ op: 'set', path: ['connections'], value: connections } as unknown as SettingsPathOpView]
+    if ((snapshot.value?.activeId ?? '') === id) {
+      ops.push({ op: 'set', path: ['activeId'], value: connections[0]?.id ?? '' })
+    }
+    try {
+      await this.scope.mutate(ops)
+      this.probes.delete(id)
+      this.failed = false
+    } catch {
+      this.failed = true
+    }
+    this.publish()
+  }
+
+  /** Read whether the Host holds values for every reference in force. */
+  private async refreshCredentials(): Promise<void> {
+    const refs = [...new Set((this.scope.getSnapshot().value?.connections ?? [])
+      .map(profile => profile.passwordEnv))]
+    await Promise.all(refs.map(async (ref) => {
+      const next = await this.credentialFace.describe(ref)
+      this.credentials.set(ref, next)
+    }))
+    this.publish()
+  }
 }

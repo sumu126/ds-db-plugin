@@ -61,7 +61,7 @@ assert.equal(
 )
 assert.equal(
   ctx.tools.get('db_tables').parameters.properties.database.description,
-  'Database to list. Defaults to the database configured on the MySQL settings page.',
+  'Database to list. Defaults to the default database of the connection in use.',
 )
 console.log('dialect-derived parameter text: unchanged')
 
@@ -171,7 +171,23 @@ const gone = await second.tools.get('db_tables').execute({ database: 'app' }, un
 assert.match(gone.message, /database dialect "postgres" is not registered/)
 console.log('dialect disposal: the registered dialect is gone again')
 
+// With several saved connections, `activeId` picks the one the tools address:
+// the refusal names the connection it used, so it discriminates the pick.
+const third = await mount({
+  connections: [
+    { id: 'a', name: 'A', dialect: 'mysql', host: '10.0.0.1', port: 1, user: 'a', database: '', passwordEnv: 'A_PASSWORD', connectTimeoutMs: 10000, queryTimeoutMs: 30000, maxRows: 200 },
+    { id: 'b', name: 'B', dialect: 'mysql', host: '10.0.0.2', port: 1, user: 'b', database: '', passwordEnv: 'B_PASSWORD', connectTimeoutMs: 10000, queryTimeoutMs: 30000, maxRows: 200 },
+  ],
+  activeId: 'b',
+})
+const picked = await third.tools.get('db_tables').execute({ database: 'app' }, undefined)
+  .then(() => undefined, error => error)
+assert.ok(picked instanceof Error, 'the active connection is what the call reaches')
+assert.match(picked.message, /b@10\.0\.0\.2:1/, 'the tools addressed the active connection, not the first')
+console.log('active connection: the tools addressed b@10.0.0.2:1')
+
 // Unload through the framework, so the session's disposers run.
 await ctx.fiber.dispose()
 await second.fiber.dispose()
+await third.fiber.dispose()
 console.log('host check passed')

@@ -1,7 +1,8 @@
 /**
- * Contract shared by both faces of the plugin: the settings namespace and its
- * field names, the connection defaults, and the exact Fetch route the browser
- * page calls. This module is client-safe — it imports nothing.
+ * Contract shared by both faces of the plugin: the settings namespace, the
+ * connection profile shape, the section that holds the saved profiles, and the
+ * exact Fetch route the browser page calls. This module is client-safe — it
+ * imports nothing.
  *
  * The connection a dialect is handed is `DatabaseConnection` in `dialect.ts`;
  * it is server-side only, and the browser half never sees one.
@@ -9,36 +10,37 @@
  * @module dsh-ds-db/src/contract
  */
 
-/** Settings namespace owning the connection. */
+/** Settings namespace owning the saved connections. */
 export const MYSQL_SETTINGS_NAMESPACE = 'ds-db'
 
-/** Exact Fetch route on the authenticated `/api` channel that probes the connection. */
+/** Exact Fetch route on the authenticated `/api` channel that probes a connection. */
 export const MYSQL_TEST_PATH = '/api/ds-db/test'
 
-/** Credential reference resolved when the section names none. */
+/** Credential reference resolved when a profile names none. */
 export const DEFAULT_PASSWORD_REF = 'DSH_MYSQL_PASSWORD'
 
-/** Every field of the MySQL settings section, in page order. */
-export const MYSQL_SETTINGS_FIELDS = [
-  'host', 'port', 'user', 'database', 'passwordEnv',
-  'connectTimeoutMs', 'queryTimeoutMs', 'maxRows',
-] as const
-
-/** One field of the MySQL settings section. */
-export type MysqlSettingsField = typeof MYSQL_SETTINGS_FIELDS[number]
+/** Id of the connection a deployment that configures nothing gets. */
+export const DEFAULT_CONNECTION_ID = 'default'
 
 /**
- * Connection and limit fields the configuration page edits and the tools read.
+ * One saved connection: the fields a card renders and a dialect session opens
+ * against.
  *
- * The password is not part of this section: the section carries the name of a
- * credential reference, and the secret itself lives in the credential store.
+ * The password is not part of this record: it carries the name of a credential
+ * reference, and the secret itself lives in the credential store.
  */
 export interface MysqlSettings {
-  /** MySQL server host name or address. */
+  /** Stable id the section's `activeId` addresses. */
+  id: string
+  /** Display name the settings page shows on the card. */
+  name: string
+  /** Registered database dialect this connection is addressed through. */
+  dialect: string
+  /** Server host name or address. */
   host: string
-  /** MySQL server TCP port. */
+  /** Server TCP port. */
   port: number
-  /** MySQL account the plugin connects as. */
+  /** Account the plugin connects as. */
   user: string
   /** Default database; empty means every tool call must name one. */
   database: string
@@ -50,4 +52,27 @@ export interface MysqlSettings {
   queryTimeoutMs: number
   /** Maximum rows one `db_query` call returns. */
   maxRows: number
+}
+
+/**
+ * The section the settings page edits: the saved connections and the one the
+ * tools address. An `activeId` that names no saved connection resolves to the
+ * only saved connection when there is exactly one, and is a refusal otherwise.
+ */
+export interface DatabaseSettings {
+  /** Saved connections, in the order the page lists them. */
+  connections: MysqlSettings[]
+  /** The connection the tools address. */
+  activeId: string
+}
+
+/**
+ * What the settings page sends to probe a connection: an unsaved draft, or the
+ * id of a saved one. Absent means the connection the tools currently address.
+ */
+export interface ProbeRequest {
+  /** Id of a saved connection to probe. */
+  id?: string
+  /** Unsaved draft to probe, as the dialog's form holds it. */
+  profile?: MysqlSettings
 }
