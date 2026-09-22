@@ -12,7 +12,8 @@ import { useEffect, useRef } from 'react'
 import { Button, IconPlusOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ConnectionCard, DbDialog, DbFormField, DbPageFace, DbProbe } from './form.ts'
-import { DIALECT_OFFERINGS, FIELD_INVALID_KEY, dialogValid, editDraftFor, fieldInvalid } from './form.ts'
+import { FIELD_INVALID_KEY, dialogValid, editDraftFor, fieldInvalid } from './form.ts'
+import type { DialectCatalog } from '../contract.ts'
 import type { MysqlLocaleKey } from './locales.ts'
 import styles from './page.css'
 
@@ -150,33 +151,42 @@ function DialogField(props: {
   )
 }
 
-/** The dialog's type chooser: one card per dialect the plugin knows of. */
+/**
+ * The dialog's type chooser: one card per registered dialect, then one card per
+ * known type whose package is not installed here.
+ */
 function TypeChooser(props: {
-  t: (key: MysqlLocaleKey) => string
+  catalog: DialectCatalog | undefined
+  t: (key: MysqlLocaleKey, params?: Record<string, string>) => string
   onChoose: (dialect: string) => void
 }) {
-  const { t } = props
-  const label = (dialect: string): string => dialect === 'postgres'
-    ? t('dialectPostgres')
-    : dialect === 'oracle' ? t('dialectOracle') : 'MySQL'
-  const desc = (dialect: string): string => dialect === 'postgres'
-    ? t('dialectPostgresDesc')
-    : dialect === 'oracle' ? t('dialectOracleDesc') : t('dialectMysqlDesc')
+  const { catalog, t } = props
+  if (catalog === undefined) return <p className={styles.dialogHint}>{t('loading')}</p>
+  if (catalog.installed.length === 0 && catalog.known.length === 0) {
+    return <p className={styles.dialogHint}>{t('noDialect')}</p>
+  }
   return (
     <div className={styles.typeGrid}>
-      {DIALECT_OFFERINGS.map(offering => (
+      {catalog.installed.map(entry => (
         <button
-          key={offering.dialect}
+          key={entry.name}
           type="button"
           className={styles.typeCard}
-          disabled={!offering.available}
-          onClick={() => { props.onChoose(offering.dialect) }}
+          onClick={() => { props.onChoose(entry.name) }}
         >
+          <span className={styles.typeName}>{entry.label}</span>
+          <p className={styles.typeDesc}>
+            {entry.configFields.length === 0 ? t('dialectMysqlDesc') : t('extraFields', { count: String(entry.configFields.length) })}
+          </p>
+        </button>
+      ))}
+      {catalog.known.map(entry => (
+        <button key={entry.name} type="button" className={styles.typeCard} disabled>
           <span className={styles.typeName}>
-            {label(offering.dialect)}
-            {!offering.available ? <span className={styles.badge}>{t('comingSoon')}</span> : null}
+            {entry.label}
+            <span className={styles.badge}>{t('comingSoon')}</span>
           </span>
-          <p className={styles.typeDesc}>{desc(offering.dialect)}</p>
+          <p className={styles.typeDesc}>{t('installHint', { package: entry.package })}</p>
         </button>
       ))}
     </div>
@@ -189,6 +199,7 @@ function FormDialog(props: {
   saving: boolean
   t: (key: MysqlLocaleKey, params?: Record<string, string>) => string
   onEditField: (field: DbFormField, text: string) => void
+  onEditExtra: (key: string, text: string) => void
   onEditPassword: (text: string) => void
   onTest: () => void
   onSave: () => void
@@ -201,6 +212,26 @@ function FormDialog(props: {
       <h3 className={styles.heading}>{t('connectionHeading')}</h3>
       {CONNECTION_FIELDS.map(field => (
         <DialogField key={field} field={field} dialog={dialog} t={t} disabled={props.saving} onEdit={props.onEditField} />
+      ))}
+      {dialog.configFields.map(field => (
+        <div className={styles.field} key={field.key}>
+          <div className={styles.head}>
+            <label className={styles.label} htmlFor={`dsh-db-extra-${field.key}`}>
+              {field.label ?? field.key}
+              {field.required ? <span className={styles.required}>*</span> : null}
+            </label>
+          </div>
+          <input
+            id={`dsh-db-extra-${field.key}`}
+            className={styles.input}
+            type={field.kind === 'number' ? 'text' : 'text'}
+            {...field.kind === 'number' ? { inputMode: 'numeric' as const } : {}}
+            value={String(dialog.extra[field.key] ?? '')}
+            disabled={props.saving}
+            onChange={(event) => { props.onEditExtra(field.key, event.target.value) }}
+          />
+          <p className={styles.hint}>{field.required ? t('requiredHint') : t('optionalHint')}</p>
+        </div>
       ))}
       <div className={styles.field}>
         <div className={styles.head}>
@@ -285,7 +316,7 @@ export function DatabaseSettingsPage(props: DatabaseSettingsPageProps) {
             t={t}
             onActivate={() => { props.activate(card.profile.id) }}
             onTest={() => { props.testSaved(card.profile.id) }}
-            onEdit={() => { props.openEdit(editDraftFor(card.profile)) }}
+            onEdit={() => { props.openEdit(editDraftFor(card.profile, state.catalog)) }}
             onRemove={() => {
               if (window.confirm(t('deleteConfirm', { name: card.profile.name }))) props.remove(card.profile.id)
             }}
@@ -303,7 +334,7 @@ export function DatabaseSettingsPage(props: DatabaseSettingsPageProps) {
                       <>
                         <h2 className={styles.dialogTitle}>{t('dialectTitle')}</h2>
                         <p className={styles.dialogHint}>{t('dialectHint')}</p>
-                        <TypeChooser t={t} onChoose={props.chooseDialect} />
+                        <TypeChooser catalog={state.catalog} t={t} onChoose={props.chooseDialect} />
                       </>
                     )
                   : (
@@ -316,6 +347,7 @@ export function DatabaseSettingsPage(props: DatabaseSettingsPageProps) {
                           saving={state.saving}
                           t={t}
                           onEditField={props.editField}
+                          onEditExtra={props.editExtra}
                           onEditPassword={props.editPassword}
                           onTest={props.testDraft}
                           onSave={props.saveDialog}

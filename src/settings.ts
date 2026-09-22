@@ -24,6 +24,7 @@ export const MYSQL_DEFAULTS: MysqlSettings = {
   id: DEFAULT_CONNECTION_ID,
   name: 'MySQL',
   dialect: 'mysql',
+  extra: {},
   host: '127.0.0.1',
   port: 3306,
   user: 'root',
@@ -42,6 +43,9 @@ export const ProfileSchema: z<MysqlSettings> = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   dialect: z.string().min(1),
+  // Values of the fields the connection's dialect declared. The dialect owns
+  // the keys and their meaning, so the section validates the shape only.
+  extra: z.dict(z.union([z.string(), z.number()])),
   host: z.string().min(1),
   port: z.natural().max(65535),
   user: z.string().min(1),
@@ -104,6 +108,7 @@ function flatConnection(config: Config): MysqlSettings {
     id: DEFAULT_CONNECTION_ID,
     name: MYSQL_DEFAULTS.name,
     dialect: config.dialect ?? MYSQL_DEFAULTS.dialect,
+    extra: {},
     host: config.host ?? MYSQL_DEFAULTS.host,
     port: config.port ?? MYSQL_DEFAULTS.port,
     user: config.user ?? MYSQL_DEFAULTS.user,

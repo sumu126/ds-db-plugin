@@ -1,0 +1,23 @@
+{
+  "project_name": "ds-db-plugin 可扩展数据库类型",
+  "project_type": "无UI项目（含设置页子模块）",
+  "created_at": "2026-09-22",
+  "tech_stack": {
+    "host": "TypeScript ESM + Node ^22.19 || >=24 + Cordis（vendored by deepseek-harness）+ Schemastery + mysql2",
+    "client": "React 18 + CSS Modules + esbuild/lightningcss（构建为 dsh client bundle）",
+    "runtime": "DeepSeek Harness (dsh) 0.1.6-alpha.2 插件运行时",
+    "mobile": "无"
+  },
+  "current_stage": 2,
+  "stages_completed": [1],
+  "requirements_count": 24,
+  "modules": [
+    "方言扩展能力（capabilities + configFields）",
+    "分发与安装（peerDependencies + 打包验证）",
+    "方言作者 SDK 与自检套件",
+    "PostgreSQL 参考实现"
+  ],
+  "goal": "第三方开发者不改本仓库即可发布方言包，为 dsh 增加新的数据库类型",
+  "repository": "s:/dev/DSH/ds-db-plugin",
+  "host_checkout": "s:/dev/DSH/deepseek-harness（开发期依赖，非运行时依赖）"
+}

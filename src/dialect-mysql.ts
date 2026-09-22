@@ -11,6 +11,7 @@
 
 import mysql from 'mysql2/promise'
 import type { FieldPacket, Pool } from 'mysql2/promise'
+import { DIALECT_CAPABILITIES, type DialectCapability } from './dialect.ts'
 import type {
   DatabaseConnection, DatabaseDialect, DialectColumnRow, DialectDatabaseRow,
   DialectIndexRow, DialectQuery, DialectSession, DialectStatement, DialectTableRow,
@@ -168,6 +169,12 @@ export const MYSQL_DIALECT: DatabaseDialect = {
   name: 'mysql',
   label: 'MySQL',
   rules: MYSQL_RULES,
+  // MySQL answers every metadata question the tools can ask, including a
+  // sampled row set and an execution plan, so nothing above it degrades.
+  capabilities: new Set<DialectCapability>(DIALECT_CAPABILITIES),
+  // MySQL needs no field beyond the shared ones; a server that does declares
+  // its own here and reads it back from `connection.extra`.
+  configFields: [],
   rowBoundHint: 'LIMIT',
   systemDatabases: MYSQL_SYSTEM_DATABASES,
 
@@ -266,6 +273,20 @@ export const MYSQL_DIALECT: DatabaseDialect = {
     return {
       statement: statement('SELECT VERSION() AS version'),
       project: row => cellText(row.version),
+    }
+  },
+
+  sample(database: string, table: string, rows: number): DialectQuery<DbRow> {
+    return {
+      statement: statement(`SELECT * FROM ${quoteMysqlIdentifier(database)}.${quoteMysqlIdentifier(table)} LIMIT ${String(rows)}`),
+      project: row => row,
+    }
+  },
+
+  explain(sql: string): DialectQuery<string> {
+    return {
+      statement: statement(`EXPLAIN ${sql}`),
+      project: row => JSON.stringify(row),
     }
   },
 }

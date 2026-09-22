@@ -13,7 +13,7 @@
 import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { SettingsPathOpView } from '@deepseek-ai/dsh-api-remotes/client'
 import type { SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client'
-import { type DatabaseSettings, type MysqlSettings } from '../contract.ts'
+import { type DatabaseSettings, type DialectCatalog, type DialectDescriptor, type MysqlSettings } from '../contract.ts'
 
 /** One editable field of the connection dialog, in form order. */
 export type DbFormField
@@ -56,13 +56,20 @@ export type DbDialog =
     id: string
     /** The dialect chosen in the type step. */
     dialect: string
-    /** Draft text per form field. */
+    /** The connection fields this dialect declared, in its own order. */
+    configFields: readonly DialectFieldDraft[]
+    /** Draft text per shared form field. */
     fields: Record<DbFormField, string>
+    /** Draft values per dialect field, keyed by the dialect's own keys. */
+    extra: Record<string, string | number>
     /** The write-only password draft. */
     password: string
     /** The last probe of this draft. */
     probe: DbProbe
   }
+
+/** One dialect field as the page renders it. */
+export type DialectFieldDraft = DialectDescriptor['configFields'][number]
 
 /** Everything the page renders. */
 export interface DatabasePageState {
@@ -76,6 +83,8 @@ export interface DatabasePageState {
   failed: boolean
   /** The saved connections as cards, in document order. */
   cards: ConnectionCard[]
+  /** The database types the page may offer; undefined until the Host answers. */
+  catalog: DialectCatalog | undefined
   /** The dialog, when one is open. */
   dialog: DbDialog
 }
@@ -94,6 +103,8 @@ export interface DbFormActions {
   closeDialog: () => void
   chooseDialect: (dialect: string) => void
   editField: (field: DbFormField, text: string) => void
+  /** Stage one dialect field's value. */
+  editExtra: (key: string, text: string) => void
   editPassword: (text: string) => void
   testDraft: () => void
   saveDialog: () => void
@@ -181,6 +192,7 @@ export function dialogProfile(dialog: DbDialog): MysqlSettings | undefined {
     id: dialog.id,
     name: dialog.fields.name.trim(),
     dialect: dialog.dialect,
+    extra: { ...dialog.extra },
     host: dialog.fields.host.trim(),
     port: Number(dialog.fields.port.trim()),
     user: dialog.fields.user.trim(),
@@ -228,13 +240,27 @@ function blankFields(): Record<DbFormField, string> {
   }
 }
 
-/** A draft dialog pre-filled from one saved profile, for the edit path. */
-export function editDraftFor(profile: MysqlSettings): DbDialog {
+/**
+ * A draft dialog pre-filled from one saved profile, for the edit path.
+ * @param profile - the saved connection to edit.
+ * @param catalog - the loaded catalog, which names the dialect's own fields;
+ * without it the dialect's fields are carried over but not described.
+ * @returns the dialog editing that profile.
+ */
+export function editDraftFor(profile: MysqlSettings, catalog?: DialectCatalog): DbDialog {
   const fields = {} as Record<DbFormField, string>
   for (const field of DB_FORM_FIELDS) fields[field] = fieldText(profile, field)
+  const configFields = catalog?.installed.find(entry => entry.name === profile.dialect)?.configFields ?? []
+  const extra: Record<string, string | number> = {}
+  for (const field of configFields) extra[field.key] = profile.extra[field.key] ?? field.default
+  // A saved value the catalog no longer describes still round-trips: dropping
+  // it would lose a setting the dialect may read.
+  for (const [key, value] of Object.entries(profile.extra)) {
+    if (!(key in extra)) extra[key] = value
+  }
   return {
     kind: 'form', mode: 'edit', id: profile.id, dialect: profile.dialect,
-    fields, password: '', probe: { status: 'idle' },
+    configFields, fields, extra, password: '', probe: { status: 'idle' },
   }
 }
 
@@ -248,6 +274,7 @@ export class DatabaseSettingsController {
   private readonly credentials = new Map<string, { configured: boolean; writable: boolean }>()
   private readonly probes = new Map<string, DbProbe>()
   private dialog: DbDialog = { kind: 'closed' }
+  private catalog: DialectCatalog | undefined
   private saving = false
   private failed = false
 
@@ -255,6 +282,7 @@ export class DatabaseSettingsController {
     private readonly scope: SettingsScope<DatabaseSettings>,
     private readonly credentialFace: MysqlCredentialsFace,
     private readonly probe: (request: { id?: string, profile?: MysqlSettings }) => Promise<DbProbe>,
+    private readonly loadCatalog: () => Promise<DialectCatalog>,
   ) {
     this.store = createSnapshotStore(this.projection())
     scope.subscribe(() => {
@@ -275,6 +303,7 @@ export class DatabaseSettingsController {
       openNew: () => {
         this.dialog = { kind: 'type' }
         this.failed = false
+        void this.refreshCatalog()
         this.publish()
       },
       openEdit: (draft) => {
@@ -290,15 +319,33 @@ export class DatabaseSettingsController {
       },
       chooseDialect: (dialect) => {
         if (this.dialog.kind !== 'type') return
+        const descriptor = this.catalog?.installed.find(entry => entry.name === dialect)
+        const configFields = descriptor?.configFields ?? []
+        const extra: Record<string, string | number> = {}
+        for (const field of configFields) extra[field.key] = field.default
         this.dialog = {
           kind: 'form', mode: 'new', id: freshId(), dialect,
-          fields: blankFields(), password: '', probe: { status: 'idle' },
+          configFields, fields: blankFields(), extra, password: '', probe: { status: 'idle' },
         }
         this.publish()
       },
       editField: (field, text) => {
         if (this.dialog.kind !== 'form') return
         this.dialog = { ...this.dialog, fields: { ...this.dialog.fields, [field]: text }, probe: { status: 'idle' } }
+        this.failed = false
+        this.publish()
+      },
+      editExtra: (key, text) => {
+        if (this.dialog.kind !== 'form') return
+        const field = this.dialog.configFields.find(candidate => candidate.key === key)
+        // A numeric field keeps its draft as text until it parses, so an empty
+        // box is distinguishable from a zero the user typed.
+        const value = field?.kind === 'number' && text.trim().length > 0 ? Number(text) : text
+        this.dialog = {
+          ...this.dialog,
+          extra: { ...this.dialog.extra, [key]: value },
+          probe: { status: 'idle' },
+        }
         this.failed = false
         this.publish()
       },
@@ -325,6 +372,7 @@ export class DatabaseSettingsController {
       writable: snapshot.writable,
       saving: this.saving,
       failed: this.failed,
+      catalog: this.catalog,
       cards: connections.map(profile => ({
         profile,
         active: profile.id === (value?.activeId ?? ''),
@@ -431,6 +479,19 @@ export class DatabaseSettingsController {
       this.failed = true
     }
     this.publish()
+  }
+
+  /** Read the database types the page may offer; the chooser waits for this. */
+  private async refreshCatalog(): Promise<void> {
+    try {
+      this.catalog = await this.loadCatalog()
+      this.publish()
+    } catch {
+      // A catalog the Host would not serve leaves the chooser empty rather
+      // than offering a type no dialect can run.
+      this.catalog = { installed: [], known: [] }
+      this.publish()
+    }
   }
 
   /** Read whether the Host holds values for every reference in force. */

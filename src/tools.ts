@@ -19,7 +19,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { MysqlSettings } from './contract.ts'
 import type { DatabaseAccess } from './connection.ts'
-import type { DatabaseDialect, DialectIndexRow } from './dialect.ts'
+import type { DatabaseDialect, DialectCapability, DialectIndexRow } from './dialect.ts'
 import { assertReadOnlyStatement, familiesPhrase } from './sql-guard.ts'
 
 /** Identity and limits one tool call runs against. */
@@ -37,6 +37,22 @@ export interface DatabaseToolsFace {
   described: DatabaseDialect
   /** Current resolved settings section. */
   settings: () => MysqlSettings
+}
+
+/**
+ * Refuse one call whose capability the dialect in force does not declare.
+ *
+ * A missing capability is a contract fact, not a failure to paper over: the
+ * tool says the server cannot answer, so a model asks for something else rather
+ * than waiting on a statement that does not exist.
+ * @param dialect - the dialect in force.
+ * @param capability - the ability this call needs.
+ * @throws {Error} when the dialect does not declare it.
+ */
+function requireCapability(dialect: DatabaseDialect, capability: DialectCapability): void {
+  if (!dialect.capabilities.has(capability)) {
+    throw new Error(`this ${dialect.label} connection does not support ${capability}, so this call cannot be answered`)
+  }
 }
 
 /** A string argument the model may have left blank. */
@@ -107,10 +123,14 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
     },
     async execute(args) {
       const view = dialect()
+      requireCapability(view, 'databases')
       const databases = await access.run(view.databases())
       const includeSystem = args.include_system === true
+      const rows = view.capabilities.has('charset')
+        ? databases
+        : databases.map(row => ({ ...row, charset: '', collation: '' }))
       return {
-        databases: databases.filter(row => includeSystem || !view.systemDatabases.includes(row.name)),
+        databases: rows.filter(row => includeSystem || !view.systemDatabases.includes(row.name)),
       }
     },
   }))
@@ -155,8 +175,15 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
     },
     async execute(args) {
       const view = dialect()
+      requireCapability(view, 'tables')
       const database = resolveDatabase(settings(), args.database, view)
-      return { database, tables: await access.run(view.tables(database)) }
+      const tables = await access.run(view.tables(database))
+      // A server that cannot estimate row counts reports none rather than
+      // letting its dialect invent a number the model would trust.
+      const rows = view.capabilities.has('estimatedRows')
+        ? tables
+        : tables.map(row => ({ ...row, estimatedRows: null }))
+      return { database, tables: rows }
     },
   }))
 
@@ -205,7 +232,10 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
               },
             },
           },
-          createStatement: { type: 'string', required: true },
+          // Omitted rather than empty when the dialect declares no
+          // `createStatement`: the field's absence is what tells a model the
+          // server cannot produce one.
+          createStatement: { type: 'string' },
         },
       },
       render: (_args, value) => [{
@@ -219,12 +249,15 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
           ...value.indexes.length === 0
             ? ['- none']
             : value.indexes.map(index => `- ${index.name} (${index.unique ? 'unique ' : ''}${index.type}) on ${index.columns.join(', ')}`),
-          value.createStatement,
+          // The create statement is simply absent from the report when the
+          // server cannot produce one.
+          ...value.createStatement === undefined ? [] : [value.createStatement],
         ].join('\n'),
       }],
     },
     async execute(args) {
       const view = dialect()
+      requireCapability(view, 'columns')
       const database = resolveDatabase(settings(), args.database, view)
       const table = args.table.trim()
       if (table.length === 0) throw new Error('table must be a non-empty name')
@@ -232,14 +265,20 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
       if (columns.length === 0) {
         throw new Error(`table ${database}.${table} does not exist or is not visible to this connection`)
       }
-      const indexes = await access.run(view.indexes(database, table))
-      const create = await access.run(view.createStatement(database, table))
+      const indexes = view.capabilities.has('indexes')
+        ? await access.run(view.indexes(database, table))
+        : []
+      const create = view.capabilities.has('createStatement')
+        ? await access.run(view.createStatement(database, table))
+        : []
       return {
         database,
         table,
         columns,
         indexes: groupIndexes(indexes),
-        createStatement: create[0] ?? '',
+        // A server with no way to render a create statement omits the field,
+        // which is the signal a model reads; it is never filled with a guess.
+        ...create[0] === undefined ? {} : { createStatement: create[0] },
       }
     },
   }))
@@ -289,6 +328,80 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
       }
     },
   }))
+
+  // The two optional tools are registered only when the dialect the descriptions
+  // were written from can answer them. A dialect that arrives later and cannot
+  // simply has no such tool, which is what the model sees in its tool list.
+  if (described.capabilities.has('sample')) {
+    ctx.tools.register(defineTool({
+      name: 'db_sample',
+      description: `Read a few rows from one ${described.label} table, so the shape of its data is visible before a query is written.`,
+      parameters: {
+        table: { type: 'string', required: true, description: 'Table or view to read.' },
+        database: { type: 'string', description: 'Database holding the table. Defaults to the default database of the connection in use.' },
+        rows: { type: 'integer', description: 'How many rows to read. Defaults to 5, and never exceeds the deployment row cap.' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            database: { type: 'string', required: true },
+            table: { type: 'string', required: true },
+            columns: { type: 'array', required: true, items: { type: 'string' } },
+            rows: { type: 'array', required: true, items: { type: 'json' } },
+          },
+        },
+        render: (_args, value) => [{
+          type: 'text',
+          text: `${value.database}.${value.table}: ${JSON.stringify(value.rows)}`,
+        }],
+      },
+      async execute(args) {
+        const view = dialect()
+        requireCapability(view, 'sample')
+        const sample = view.sample
+        if (sample === undefined) throw new Error(`this ${view.label} connection does not support sample`)
+        const current = settings()
+        const database = resolveDatabase(current, args.database, view)
+        const table = args.table.trim()
+        if (table.length === 0) throw new Error('table must be a non-empty name')
+        const requested = typeof args.rows === 'number' ? Math.floor(args.rows) : 5
+        const rows = Math.min(Math.max(requested, 1), current.maxRows)
+        const outcome = await access.query(sample(database, table, rows).statement.sql, [])
+        return { database, table, columns: outcome.columns, rows: outcome.rows }
+      },
+    }))
+  }
+
+  if (described.capabilities.has('explain')) {
+    ctx.tools.register(defineTool({
+      name: 'db_explain',
+      description: `Explain how ${described.label} would execute one read-only statement, without running it.`,
+      parameters: {
+        sql: { type: 'string', required: true, description: 'One read-only statement to explain.' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            plan: { type: 'array', required: true, items: { type: 'string' } },
+          },
+        },
+        render: (_args, value) => [{ type: 'text', text: value.plan.join('\n') }],
+      },
+      async execute(args) {
+        const view = dialect()
+        requireCapability(view, 'explain')
+        const explain = view.explain
+        if (explain === undefined) throw new Error(`this ${view.label} connection does not support explain`)
+        const statement = assertReadOnlyStatement(args.sql, view.rules)
+        const plan = await access.run(explain(statement))
+        return { plan }
+      },
+    }))
+  }
 }
 
 /** One index as `db_describe` reports it. */

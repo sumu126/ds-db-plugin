@@ -14,6 +14,7 @@ import { Context } from '@deepseek-ai/cordis'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import * as mysqlReadOnly from '../src/index.ts'
+import { dialectCatalog } from '../src/index.ts'
 import { MYSQL_DIALECT } from '../src/dialect-mysql.ts'
 
 const TOOL_NAMES = ['db_databases', 'db_tables', 'db_describe', 'db_query']
@@ -112,6 +113,7 @@ function standInDialect(label, version) {
   const rowsFor = (sql) => {
     if (sql.includes('pg_database')) return [{ name: 'app' }]
     if (sql.includes('pg_tables')) return [{ name: 'events', type: 'BASE TABLE' }]
+    if (sql.includes('information_schema.columns')) return [{ name: 'id' }]
     if (sql.includes('version')) return [{ version }]
     return []
   }
@@ -119,6 +121,10 @@ function standInDialect(label, version) {
     name: 'postgres',
     label,
     rules: MYSQL_DIALECT.rules,
+    // Every ability but `createStatement`: this server has no way to render
+    // one, and the seam says so instead of returning a guess.
+    capabilities: new Set(['databases', 'tables', 'columns', 'indexes', 'estimatedRows', 'charset', 'version']),
+    configFields: [{ key: 'serviceName', kind: 'text', default: 'ORCL', required: true, label: 'Service name' }],
     rowBoundHint: 'FETCH FIRST',
     systemDatabases: [],
     async open() {
@@ -164,6 +170,23 @@ assert.match(seen.sql, /FETCH FIRST 201 ROWS ONLY/, 'the second dialect bounded 
 assert.equal(bounded.rowCount, 0)
 console.log(`second dialect bounded a query: ${JSON.stringify(seen.sql)}`)
 
+// A dialect that cannot produce a create statement omits the field: the seam
+// degrades instead of running a statement the server does not have.
+const described = await second.tools.get('db_describe').execute({ database: 'app', table: 'events' }, undefined)
+assert.equal(described.createStatement, undefined, 'a dialect without createStatement omits it')
+assert.equal(described.table, 'events')
+console.log('capability degradation: db_describe omitted createStatement')
+
+// The page's type chooser reads the registered dialects plus what a deployment
+// could install, so a dialect package shows up without being known in advance.
+const catalog = dialectCatalog(second.databaseDialects)
+assert.deepEqual(catalog.installed.map(entry => entry.name), ['mysql', 'postgres'])
+assert.deepEqual(catalog.installed.find(entry => entry.name === 'postgres').configFields.map(field => field.key), ['serviceName'])
+// `postgres` is registered above, so it is no longer offered as installable:
+// the known list is what this deployment is missing, not a static catalog.
+assert.deepEqual(catalog.known.map(entry => entry.name), ['oracle'])
+console.log(`dialect catalog: installed ${catalog.installed.map(entry => entry.name).join(', ')}`)
+
 // Registration is an effect: disposing it takes the dialect away again.
 dispose()
 const gone = await second.tools.get('db_tables').execute({ database: 'app' }, undefined)
@@ -185,6 +208,13 @@ const picked = await third.tools.get('db_tables').execute({ database: 'app' }, u
 assert.ok(picked instanceof Error, 'the active connection is what the call reaches')
 assert.match(picked.message, /b@10\.0\.0\.2:1/, 'the tools addressed the active connection, not the first')
 console.log('active connection: the tools addressed b@10.0.0.2:1')
+
+// An undeclared capability is refused at registration, not silently accepted.
+assert.throws(
+  () => third.databaseDialects.register({ ...MYSQL_DIALECT, name: 'bogus', capabilities: new Set(['teleport']) }),
+  /declares unknown capability "teleport"/,
+)
+console.log('capability check: an unknown capability is refused at registration')
 
 // Unload through the framework, so the session's disposers run.
 await ctx.fiber.dispose()

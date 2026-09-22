@@ -20,7 +20,8 @@ import type {} from '@deepseek-ai/dsh-credentials'
 import type {} from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-tools'
 import { DatabaseAccess } from './connection.ts'
-import { MYSQL_SETTINGS_NAMESPACE, MYSQL_TEST_PATH, type DatabaseSettings, type MysqlSettings, type ProbeRequest } from './contract.ts'
+import { MYSQL_DIALECTS_PATH, MYSQL_SETTINGS_NAMESPACE, MYSQL_TEST_PATH, type DatabaseSettings, type DialectCatalog, type MysqlSettings, type ProbeRequest } from './contract.ts'
+import { KNOWN_DIALECT_PACKAGES } from './dialect-catalog.ts'
 import { DatabaseDialectRegistry, resolveDialect, type DatabaseConnection, type DatabaseDialect } from './dialect.ts'
 import { MYSQL_DIALECT } from './dialect-mysql.ts'
 import { compositionEntry, Config, DatabaseSettingsSchema } from './settings.ts'
@@ -134,7 +135,50 @@ export function apply(ctx: Context, config: Config): void {
         headers: { 'cache-control': 'no-store' },
       }),
     }), `ds-db: POST ${MYSQL_TEST_PATH}`)
+
+    // The page's type chooser reads the registered dialects from here, so a
+    // dialect that arrives in its own package shows up without this plugin
+    // knowing its name in advance.
+    webCtx.effect(() => connection.fetch.register({
+      path: MYSQL_DIALECTS_PATH,
+      methods: ['GET'],
+      requestBody: 'buffered',
+      fetch: async (): Promise<Response> => Response.json(dialectCatalog(registry), {
+        headers: { 'cache-control': 'no-store' },
+      }),
+    }), `ds-db: GET ${MYSQL_DIALECTS_PATH}`)
   })
+}
+
+/**
+ * Describe every database type the page may offer: what is registered here, and
+ * what a deployment could install.
+ * @param registry - the dialects registered in this deployment.
+ * @returns the catalog the type chooser renders.
+ */
+export function dialectCatalog(registry: DatabaseDialectRegistry): DialectCatalog {
+  const installed = registry.names()
+    .map((name) => {
+      const dialect = registry.get(name)
+      if (dialect === undefined) return undefined
+      return {
+        name: dialect.name,
+        label: dialect.label,
+        capabilities: [...dialect.capabilities],
+        configFields: dialect.configFields.map(field => ({
+          key: field.key,
+          kind: field.kind,
+          default: field.default,
+          required: field.required,
+          ...field.label === undefined ? {} : { label: field.label },
+          ...field.sensitive === true ? { sensitive: true } : {},
+        })),
+      }
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined)
+  const known = KNOWN_DIALECT_PACKAGES
+    .filter(entry => !installed.some(dialect => dialect.name === entry.name))
+  return { installed, known }
 }
 
 /**
@@ -160,6 +204,7 @@ async function resolveConnection(ctx: Context, profile: MysqlSettings): Promise<
     user: profile.user,
     password: resolved?.value ?? '',
     ...database.length === 0 ? {} : { database },
+    extra: profile.extra,
     connectTimeoutMs: profile.connectTimeoutMs,
     queryTimeoutMs: profile.queryTimeoutMs,
     maxRows: profile.maxRows,

@@ -24,6 +24,47 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
+/**
+ * One metadata ability a database may or may not offer.
+ *
+ * A dialect declares the set it really provides; a tool degrades on a missing
+ * one instead of running a statement the server does not have. The set is
+ * extensible: an unknown key is refused at registration rather than at compile
+ * time.
+ */
+export type DialectCapability =
+  /** Listing the databases the connection can see. */
+  | 'databases'
+  /** Listing one database's tables and views. */
+  | 'tables'
+  /** Describing one table's columns. */
+  | 'columns'
+  /** Describing one table's indexes. */
+  | 'indexes'
+  /** Producing the statement that creates a table. */
+  | 'createStatement'
+  /** Estimating a table's row count. */
+  | 'estimatedRows'
+  /** Reporting a database's character set and collation. */
+  | 'charset'
+  /** Answering the server's version. */
+  | 'version'
+  /** Sampling a few rows cheaply. */
+  | 'sample'
+  /** Explaining one statement's plan. */
+  | 'explain'
+
+/** Every capability a dialect may declare. */
+export const DIALECT_CAPABILITIES: readonly DialectCapability[] = [
+  'databases', 'tables', 'columns', 'indexes', 'createStatement',
+  'estimatedRows', 'charset', 'version', 'sample', 'explain',
+]
+
+/** Whether one value is a declared capability, for the registry's own checks. */
+function isCapability(value: unknown): value is DialectCapability {
+  return typeof value === 'string' && DIALECT_CAPABILITIES.includes(value as DialectCapability)
+}
+
 /** Connection identity as the host resolves it, password included. */
 export interface DatabaseConnection {
   /** Server host name or address. */
@@ -40,6 +81,12 @@ export interface DatabaseConnection {
    * servers disagree on whether this is a schema or a service name.
    */
   database?: string
+  /**
+   * Values of the connection fields this dialect declared, keyed by its own
+   * field keys; empty when it declares none. A dialect reads its own keys here
+   * and never another dialect's.
+   */
+  extra: Record<string, string | number>
   /** TCP connect timeout in milliseconds. */
   connectTimeoutMs: number
   /** Per-statement execution timeout in milliseconds. */
@@ -137,6 +184,29 @@ export interface DialectSession {
 }
 
 /**
+ * One connection field a dialect needs beyond the shared ones.
+ *
+ * The settings page renders these under the connection's own dialect and stores
+ * the values in {@link DatabaseConnection.extra} under {@link key}.
+ */
+export interface DialectConfigField {
+  /** Key the value is stored under; an identifier the dialect reads back. */
+  readonly key: string
+  /** Control the page renders, and the value type the field holds. */
+  readonly kind: 'text' | 'number' | 'secret-ref'
+  /** Value the page seeds the control with. */
+  readonly default: string | number
+  /** Whether an empty value blocks the tool call that needs it. */
+  readonly required: boolean
+  /** Dictionary key of this field's hint; falls back to {@link label}. */
+  readonly hintKey?: string
+  /** Label the page shows, and the fallback when no dictionary holds `hintKey`. */
+  readonly label?: string
+  /** Whether the control is write-only, for values that are secrets. */
+  readonly sensitive?: boolean
+}
+
+/**
  * One supported database: its driver, its metadata statements, and its syntax.
  *
  * A dialect is a plain object registered into {@link DatabaseDialectRegistry},
@@ -149,6 +219,10 @@ export interface DatabaseDialect {
   readonly label: string
   /** How this dialect's statements are judged before execution. */
   readonly rules: ReadOnlyRules
+  /** The metadata abilities this dialect really provides; tools degrade on the rest. */
+  readonly capabilities: ReadonlySet<DialectCapability>
+  /** Connection fields only this dialect needs, rendered by the settings page. */
+  readonly configFields: readonly DialectConfigField[]
   /** The row-bound clause a model should write itself, such as `LIMIT`. */
   readonly rowBoundHint: string
   /** Schemas the server owns, hidden by `db_databases` unless the call asks for them. */
@@ -200,6 +274,24 @@ export interface DatabaseDialect {
   createStatement(database: string, table: string): DialectQuery<string>
   /** @returns the query answering the server's version. */
   version(): DialectQuery<string>
+  /**
+   * Read a few rows from one table, for `db_sample`.
+   *
+   * Optional, and only a dialect declaring the `sample` capability provides it:
+   * the tool is registered for the dialects that can answer and is absent for
+   * the rest, rather than failing at call time.
+   * @param database - the database holding the table.
+   * @param table - the table to read.
+   * @param rows - how many rows to read.
+   * @returns the query reading them.
+   */
+  sample?(database: string, table: string, rows: number): DialectQuery<DbRow>
+  /**
+   * Explain one statement's plan, for `db_explain`. Optional, as `sample` is.
+   * @param statement - an already-judged read-only statement.
+   * @returns the query answering the plan.
+   */
+  explain?(statement: string): DialectQuery<string>
 }
 
 /**
@@ -227,6 +319,27 @@ export class DatabaseDialectRegistry extends Service {
   register(dialect: DatabaseDialect): () => void {
     if (this.dialects.has(dialect.name)) {
       throw new Error(`database dialect "${dialect.name}" is already registered`)
+    }
+    // Registered, not declared at the type level: an undeclared capability or a
+    // malformed field key would silently degrade a tool or write an unreadable
+    // setting, and both are failures a registration can name.
+    for (const capability of dialect.capabilities) {
+      if (!isCapability(capability)) {
+        throw new Error(`database dialect "${dialect.name}" declares unknown capability "${String(capability)}"`)
+      }
+    }
+    for (const field of dialect.configFields) {
+      if (!/^[a-z][A-Za-z0-9]*$/.test(field.key)) {
+        throw new Error(`database dialect "${dialect.name}" declares a config field with an unusable key "${field.key}"`)
+      }
+    }
+    // An optional method is optional, but declaring the ability without it
+    // would register a tool that can only fail; registration names that.
+    if (dialect.capabilities.has('sample') && dialect.sample === undefined) {
+      throw new Error(`database dialect "${dialect.name}" declares "sample" but implements no sample()`)
+    }
+    if (dialect.capabilities.has('explain') && dialect.explain === undefined) {
+      throw new Error(`database dialect "${dialect.name}" declares "explain" but implements no explain()`)
     }
     this.dialects.set(dialect.name, dialect)
     return () => { this.dialects.delete(dialect.name) }

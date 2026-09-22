@@ -18,7 +18,7 @@ import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import type { DbPageFace, DbProbe } from './form.ts'
 import { DatabaseSettingsController, type MysqlCredentialsFace } from './form.ts'
 import { DatabaseSettingsPage } from './DatabaseSettingsPage.tsx'
-import { MYSQL_SETTINGS_NAMESPACE, MYSQL_TEST_PATH, type DatabaseSettings, type MysqlSettings, type ProbeRequest } from '../contract.ts'
+import { MYSQL_DIALECTS_PATH, MYSQL_SETTINGS_NAMESPACE, MYSQL_TEST_PATH, type DatabaseSettings, type DialectCatalog, type MysqlSettings, type ProbeRequest } from '../contract.ts'
 
 import { en, zh, type MysqlLocaleKey } from './locales.ts'
 
@@ -57,7 +57,7 @@ export function apply(ctx: ClientContext): void {
     },
     set: async (ref, value) => { await ctx.remote.credentials.set(ref, value) },
   }
-  const controller = new DatabaseSettingsController(scope, credentials, probeConnection)
+  const controller = new DatabaseSettingsController(scope, credentials, probeConnection, loadCatalog)
   const t = ctx.locale.bind(NS)
 
   ctx.slots.inject('settings.section', () => ctx.slots.register({
@@ -70,6 +70,26 @@ export function apply(ctx: ClientContext): void {
     locale: NS,
     inject: (): DbPageFace => ({ hooks: { dbPage: controller.snapshot }, ...controller.actions() }),
   }, DatabaseSettingsPage))
+}
+
+/**
+ * Read the database types the page may offer from the plugin's own
+ * authenticated API route.
+ * @returns the catalog; a transport failure yields an empty one, which the
+ * chooser renders as nothing to pick rather than a broken dialog.
+ */
+async function loadCatalog(): Promise<DialectCatalog> {
+  try {
+    const response = await fetch(MYSQL_DIALECTS_PATH, { method: 'GET' })
+    if (!response.ok) return { installed: [], known: [] }
+    const payload = await response.json() as DialectCatalog
+    return {
+      installed: payload.installed ?? [],
+      known: payload.known ?? [],
+    }
+  } catch {
+    return { installed: [], known: [] }
+  }
 }
 
 /**
