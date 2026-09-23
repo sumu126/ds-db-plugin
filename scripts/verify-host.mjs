@@ -208,6 +208,22 @@ function standInDialect(label, version, name = 'postgres') {
           // they did not, a cancelled call would run to completion instead.
           if (statement.signal?.aborted === true) throw new Error('the call was cancelled')
 
+          if (statement.sql.includes('unstable')) {
+            // MySQL's failure path: the cancellation retires the session *and*
+            // fails the call, so both the "cancelled" and the "unusable" rules
+            // point at it — the shape that decides whether a retry happens.
+            const held = new Promise((resolve, reject) => {
+              const timer = setTimeout(resolve, 5000)
+              statement.signal?.addEventListener('abort', () => {
+                clearTimeout(timer)
+                retired = true
+                reject(new Error('the call was cancelled and the session retired'))
+              }, { once: true })
+            })
+            arrive('unstable')
+            await held
+          }
+
           if (state.holdVersion && statement.sql.includes('version')) {
             // Held so a probe can be cancelled while it waits for the version.
             const held = new Promise((resolve, reject) => {
@@ -388,6 +404,24 @@ assert.equal(postgres.state.opens, opensAfterCancel + 1, 'the next call opened a
 assertOutput(second, 'db_query', afterCancel)
 console.log(`cancellation in flight: session closed, next call reopened (${String(postgres.state.opens)} opens)`)
 
+// A cancellation that also retires the session is where the two rules meet, and
+// it must not be retried: the first failure is the one that names the connection,
+// and a retry would open another session for a call the caller already gave up
+// on and report a "cancelled before it ran" in place of the real reason.
+const unstable = new AbortController()
+const unstableRunning = postgres.watch('unstable')
+const unstableCall = second.tools.get('db_query').execute({ sql: 'SELECT unstable' }, { signal: unstable.signal })
+await unstableRunning
+unstable.abort()
+const unstableError = await unstableCall.then(() => undefined, error => error)
+assert.ok(unstableError instanceof Error, 'a cancelled call fails')
+assert.match(unstableError.message, /the call was cancelled and the session retired/, 'the first failure is the one reported')
+assert.match(unstableError.message, /nobody@127\.0\.0\.1:1/, 'and it names the connection it happened on')
+const opensBeforeUnstable = postgres.state.opens
+await second.tools.get('db_query').execute({ sql: 'SELECT 1' }, CALL)
+assert.equal(postgres.state.opens, opensBeforeUnstable + 1, 'the cancellation was not retried')
+console.log('cancellation with a retired session: one failure, no retry')
+
 // The cancellation MySQL really performs: the pool is ended to interrupt, which
 // queues a COM_QUIT behind the statement already running, so that statement
 // finishes and the call returns rows — and the session is gone anyway. The
@@ -435,6 +469,9 @@ const solo = new Context()
 await solo.plugin(SystemPrompt, {})
 await solo.plugin(ToolRuntime, { mode: 'native', maxParallelSubCalls: 1 })
 await solo.plugin(mysqlReadOnly, {
+  // Long enough that registering the dialect below is what wakes the wait, not
+  // the fallback timer: the check then depends on an event, not on timing.
+  dialectWaitMs: 5000,
   connections: [{
     id: 'lite', name: 'Lite', dialect: 'lite', extra: {},
     host: '127.0.0.1', port: 1, user: 'nobody', database: 'app',

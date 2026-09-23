@@ -206,9 +206,13 @@ export class DatabaseAccess {
     try {
       return { live: first, ...await this.statement(first, statement, signal) }
     } catch (error: unknown) {
-      // `statement` evicts a session it found unusable before it throws, so an
-      // unusable one here means the next call would already open another.
-      if (sessionUsable(first)) throw error
+      // A cancelled call is never retried. The cancellation is often *why* the
+      // session reports itself unusable — that is exactly what MySQL's
+      // `usable()` says — so the two rules meet here, and the retry would both
+      // open a second session for a call the caller already gave up on and
+      // replace the first failure, the one that names the connection, with a
+      // "cancelled before it ran". One failure is what a cancellation gets.
+      if (signal?.aborted === true || sessionUsable(first)) throw error
       const second = await this.session(profile)
       return { live: second, ...await this.statement(second, statement, signal) }
     }
