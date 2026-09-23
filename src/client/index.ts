@@ -81,6 +81,15 @@ export function apply(ctx: ClientContext): void {
  * @returns the catalog; a transport failure yields an empty one, which the
  * chooser renders as nothing to pick rather than a broken dialog.
  */
+/**
+ * Read the catalog over the plugin's own route.
+ *
+ * A plain `fetch` rather than `ctx.remote.<ns>.<method>()`: the remote surface
+ * comes from a generator this repository does not run, so the two endpoints are
+ * HTTP routes on the authenticated `/api` channel (see the README's known
+ * limitations). The consequence is visible right below — the answer is
+ * completed field by field instead of arriving as a generated type.
+ */
 async function loadCatalog(): Promise<DialectCatalog> {
   try {
     const response = await fetch(DB_DIALECTS_PATH, { method: 'GET' })

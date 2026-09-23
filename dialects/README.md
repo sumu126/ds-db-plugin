@@ -60,6 +60,12 @@ npm run build      # 打包成 lib/index.js（主包的 npm run build 也会遍�
 | 现象 | 原因 |
 | --- | --- |
 | `Cannot find package 'dsh-ds-db'` | 核心没被链接进来；跑 `pnpm install`（按 workspace 链接）。包管理器不可用时手工建**目录联接**，但注意：`New-Item -ItemType Junction -Path node_modules\dsh-ds-db -Target $PWD` 会让 `node_modules` 自我引用，**遍历文件时必须排除 `node_modules`**（git、ripgrep、编辑器默认都排除），否则会无限展开 |
+
+## 一个已知的依赖方向偏离（有意）
+
+本仓的方言包 `peerDependencies` 是 **`dsh-ds-db`（整个插件）**，不是一份接口契约包。第一方 harness 不这样做：`dsh-bash-local` 只 peer `dsh-shell`（定义），绝不 peer `dsh-tool-bash`（消费者）。
+
+**为什么现在这样**：唯一随包发布的方言是 `dsh-dialect-mysql`，与插件同仓同版本，拆出第二个发布物只会多一条独立版本线。**什么时候改**：一旦有方言需要独立发布，就把 `dialect` / `sql-guard` / `value` / `dialect-audit` 抽成 `dsh-db-dialect-api`，方言包改依赖它（验收：`grep -rn "dsh-ds-db/src" dialects/` 为空）。理由与验收写在同一处：[`../README.md`](../README.md) 的已知限制。
 | 类型检查报 harness 源码的错 | 用了 `tsconfig.json` 而不是 `tsconfig.types.json` |
 | 工具描述里是兜底文案 | 方言注册晚于工具注册；确认方言行排在了 `ds-db` 行之前 |
 | 设置页没出现我的类型 | 页面读的是 `GET /api/ds-db/dialects`，确认方言已注册 |
