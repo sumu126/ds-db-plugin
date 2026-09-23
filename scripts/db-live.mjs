@@ -188,6 +188,79 @@ async function checkExplain(name) {
   console.log(`  db_explain: ${String(plan.plan.length)} plan row(s)`)
 }
 
+/**
+ * Cancellation, against a real pool: what aborting does, and what survives it.
+ *
+ * The seam's own note says a cancellation retires the session rather than
+ * interrupting the statement — mysql2's promise pool has no `destroy()`, so
+ * `end()` queues a COM_QUIT behind the statement already running. So this
+ * measures that instead of asserting the call ends promptly: it asserts the call
+ * comes back **after** the statement would have finished, and that the next call
+ * works. The second half is the repair N9 made, and this is its first time
+ * against a real driver.
+ * @param name - the saved connection to cancel a call on.
+ */
+async function checkCancellation(name) {
+  const sleepSeconds = 4
+  const controller = new AbortController()
+  const pending = ctx.tools.get('db_query').execute(
+    { connection: name, sql: `SELECT SLEEP(${String(sleepSeconds)}) AS slept` },
+    { signal: controller.signal },
+  )
+  // Let the statement reach the server first, so what is measured is a
+  // cancellation in flight rather than one before the call started.
+  await new Promise(resolve => setTimeout(resolve, 500))
+  const at = Date.now()
+  controller.abort()
+  const outcome = await pending.then(() => undefined, error => error)
+  const elapsed = Date.now() - at
+
+  assert.ok(
+    elapsed >= sleepSeconds * 1000 * 0.5,
+    `the call outlives the cancellation, as the seam documents (came back after ${String(elapsed)} ms)`,
+  )
+  console.log(`  cancellation: aborted in flight, call returned ${String(elapsed)} ms later`
+    + ` — a ${String(sleepSeconds)}s statement, cancelled by retiring the session, not by interrupting it`)
+  if (outcome instanceof Error) {
+    console.log(`  cancellation: it ended as "${outcome.message.split('\n')[0].slice(0, 100)}"`)
+  }
+
+  const after = await call('db_query', { connection: name, sql: 'SELECT 1 AS one' })
+  assert.equal(after.rows.length, 1, 'the next call reconnects and works')
+  console.log('  cancellation: the next call succeeded — a retired session is replaced, not reused')
+}
+
+/**
+ * The query timeout, on a context whose connection asks for a short one.
+ *
+ * It gets a context of its own because the timeout belongs to the connection: the
+ * user's own connections carry the deployment's 30 s, and borrowing one of those
+ * would make this check wait half a minute to prove a one-and-a-half-second rule.
+ * @param base - a saved connection to copy, addressed by the composition layer.
+ */
+async function checkTimeout(base) {
+  const timing = new Context()
+  await timing.plugin(SystemPrompt, {})
+  await timing.plugin(ToolRuntime, { mode: 'native', maxParallelSubCalls: 1 })
+  await timing.plugin(CredentialsLocal, {})
+  await timing.plugin(mysqlDialect, {})
+  await timing.plugin(mysqlReadOnly, {
+    connections: [{ ...base, id: 'timing', name: 'timing', queryTimeoutMs: 1500 }],
+  })
+  for (let attempt = 0; attempt < 200 && timing.tools.get('db_query') === undefined; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+  const started = Date.now()
+  const outcome = await timing.tools.get('db_query')
+    .execute({ sql: 'SELECT SLEEP(5) AS slept' }, { signal: new AbortController().signal })
+    .then(() => undefined, error => error)
+  const elapsed = Date.now() - started
+  assert.ok(outcome instanceof Error, 'a statement past the query timeout fails instead of hanging')
+  assert.ok(elapsed < 4500, `and it fails before the statement would have finished (${String(elapsed)} ms)`)
+  console.log(`  timeout: a 1.5 s timeout ended a 5 s statement after ${String(elapsed)} ms`)
+  await timing.fiber.dispose()
+}
+
 const listed = await call('db_connections', {})
 const saved = new Map(listed.connections.map(connection => [connection.name, connection]))
 for (const name of names) {
@@ -205,9 +278,19 @@ for (const name of names) {
   await checkCrossSource(name)
   await checkCards(name)
   await checkExplain(name)
+  // Last on this connection: cancelling retires that connection's session, so
+  // every check needing a healthy one has already run.
+  await checkCancellation(name)
 }
 
-console.log(`\nsettings section: ${String(ctx.settings.section(DB_SETTINGS_NAMESPACE)?.connections?.length ?? 0)} connection(s)`)
+// The timing context opens a connection of its own, and it runs last of all so
+// nothing of the user's is still in flight while a timeout is provoked.
+const profiles = ctx.settings.section(DB_SETTINGS_NAMESPACE)?.connections ?? []
+const base = profiles.find(profile => profile.name === names[0])
+assert.ok(base !== undefined, `the settings section holds a profile named "${names[0]}"`)
+await checkTimeout(base)
+
+console.log(`\nsettings section: ${String(profiles.length)} connection(s)`)
 console.log('live database check passed')
 
 // The settings service watches its file and a credentials store watches theirs;

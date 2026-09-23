@@ -213,6 +213,13 @@ export class DatabaseAccess {
       // replace the first failure, the one that names the connection, with a
       // "cancelled before it ran". One failure is what a cancellation gets.
       if (signal?.aborted === true || sessionUsable(first)) throw error
+      // The other half of that rule: a session that died for a reason no call
+      // caused — a pool closed outside this plugin — is retried once on a fresh
+      // one, so the driver's "pool is closed" never reaches the model. Every
+      // statement here has passed the read-only rules, so a second run cannot
+      // double an effect. Measured on a real pool: removing either this retry or
+      // the eviction in `statement` still leaves the next call working; removing
+      // both is what makes the connection fail the way N9 reported.
       const second = await this.session(profile)
       return { live: second, ...await this.statement(second, statement, signal) }
     }
@@ -343,6 +350,11 @@ export class DatabaseAccess {
     // returns its rows. The session is gone all the same, so the success path
     // evicts it too; keeping it would make every later call on that connection
     // fail with the driver's own "pool is closed" and nothing pointing at why.
+    // Second of the two guarantees that a cancellation does not poison the
+    // connection: this one keeps the retired session out of the cache, and the
+    // retry above catches the case where it got in anyway. Measured on a real
+    // pool: removing either alone still leaves the next call working, removing
+    // both makes it fail with the driver's "pool is closed".
     if (signal?.aborted === true || !sessionUsable(live)) this.drop(live)
     // Measured before projection, so the reported time is the server's work.
     const elapsedMs = Date.now() - started
