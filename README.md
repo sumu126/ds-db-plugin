@@ -286,6 +286,31 @@ cd <你的方言目录> && git init && npm run verify && npm publish
 | 我声明了 `sample`，却没有 `db_sample` 工具 | 工具按**活动连接的方言**描述。活动连接指向的方言尚未注册时（或超过 `dialectWaitMs` 才注册），描述来自拒绝桩，两个可选工具就不注册——重载插件即可 |
 | 改了浏览器侧内容没生效 | 浏览器半边是构建产物，必须重新 build |
 
+## 十分钟上手
+
+```sh
+git clone https://github.com/sumu126/ds-db-plugin.git
+cd ds-db-plugin
+# 同级目录需要一份 harness checkout（tsconfig 的 paths 指向 ../deepseek-harness）
+pnpm install --no-frozen-lockfile
+node -v                                  # 需要 22.x
+pnpm run typecheck && pnpm test
+pnpm run verify:host && pnpm run verify:cards
+```
+
+**Node 22 是硬要求**：`Promise.withResolvers`、`node:zlib` 的 zstd、`--experimental-strip-types` 都在用；低于 22 会直接报错而不是降级。
+
+| 检查 | 前置 | 新人能直接跑吗 |
+| --- | --- | --- |
+| `typecheck` / `test`（24 例） | 兄弟 `../deepseek-harness` | ✅ |
+| `verify:host` / `verify:cards` | 同上 | ✅ |
+| `verify:settings` | 同上；读**你自己**的 `~/.dsh/settings.yaml` | ✅（空文档时回落到工具自身计数，不会假红） |
+| `verify:loader` | 同上；自带一次性 `DSH_HOME` | ✅ |
+| `card:live` | **你自己的会话日志路径** | ❌ 不属于上手路径 |
+| `db:live` | **你自己的连接名 + 凭据** | ❌ 同上 |
+
+两条手工检查要显式传你自己环境的东西（会话日志、连接名），所以它们不是上手路径的一部分——它们是**你改完东西之后的回归工具**。
+
 ## 给插件开发者：本地开发
 
 ```sh
@@ -345,7 +370,7 @@ pnpm dsh web --patch <插件目录>/.dev/cordis.yml
 ## 已知限制 / 暂未实现
 
 - **随主包分发的方言只有 `dsh-dialect-mysql`**：它和第三方方言形状完全一致，只是被核心的 bundle 层与 `dependencies` 一起带上。PostgreSQL 与 Oracle 都还没有实现——加 PostgreSQL 便宜（`information_schema` 大体可移植、`?`→`$n` 是机械替换），加 Oracle 贵（无 `LIMIT`、无 `information_schema`、SID 与 service name 两种连法、`oracledb` 是重量级原生依赖）。两者都可以照 `dialects/_template` 起手，并参考 `dialects/mysql` 的完整实现
-- **打包版 dsh 上的 `dsh plugin add` 安装实测未完成**：声明已补齐，缺真实打包环境验证
+- **`dsh plugin add` 的安装实测仍未完成，但原因已具体**：`dsh-dialect-mysql` 以 `workspace:^` 声明，只有 `pnpm pack` / `pnpm publish` 会把它改写成版本号（**已实测**：`npm pack` 的产物里原样保留 `workspace:^`，消费者装不上）。发布与 tarball 验证需要在普通终端跑：`pnpm install` → `pnpm pack`（root 与 `dialects/mysql` 各一个）→ `dsh plugin --profile demo add <tgz>`
 - **配置字段是「通用字段 + `extra`」**：Oracle 这类需要 service name 的库可以表达；但 SQLite 这类没有 host/port 概念的库仍会看到多余字段，届时升级为「字段完全由方言声明」（见 [`docs/05_Docs/decisions/`](docs/05_Docs/decisions/)）
 - **命名已全中立**：工具名（`db_*`）、设置命名空间（`ds-db`）、路由（`/api/ds-db/*`）、字典命名空间（`settings.db`）、默认凭据引用（`DSH_DB_PASSWORD`）都不含数据库类型字样；带 `MYSQL_*` 的标识符只出现在 `dsh-dialect-mysql` 包内——那是这个方言自己的名字
 - **定义式包（Definition）未抽出——有意偏离**：`DatabaseDialect`、只读规则、值投影与注册表定义仍住在 `dsh-ds-db` 内，所以**方言包 peer 依赖的是整个插件**（工具、设置页、客户端都在里面），而不是一份接口契约。这偏离了第一方 `dsh-shell`（定义）/ `dsh-bash-local`（实现）的 Shape。
