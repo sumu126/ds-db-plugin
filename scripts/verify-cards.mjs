@@ -1,0 +1,159 @@
+/**
+ * Card check: the first guard over the browser half of this plugin.
+ *
+ * The other checks mount the Host; this one mounts the Host *and* the card model
+ * the browser runs, then walks the metadata from one to the other. What it
+ * proves is the contract between the two halves: a card the Host writes is a card
+ * the client reads back the same way, and every way a call can fail to be a card
+ * falls back to the generic row instead of drawing something wrong.
+ *
+ * The model imports no React and touches no DOM, which is why this runs in Node.
+ *
+ * Run it from this plugin's directory; `tsconfig.json` points `@deepseek-ai/*`
+ * at the harness checkout beside it, and tsx resolves those paths from the
+ * working directory.
+ *
+ *   npm run verify:cards
+ */
+import assert from 'node:assert/strict'
+import { Context } from '@deepseek-ai/cordis'
+import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
+import { ToolRuntime } from '@deepseek-ai/dsh-tools'
+import * as mysqlReadOnly from '../src/index.ts'
+import * as mysqlDialect from '../dialects/mysql/src/index.ts'
+import { dbCardModel, errorText, genericText } from '../src/client/card-model.ts'
+
+const ctx = new Context()
+await ctx.plugin(SystemPrompt, {})
+await ctx.plugin(ToolRuntime, { mode: 'native', maxParallelSubCalls: 1 })
+await ctx.plugin(mysqlDialect, {})
+await ctx.plugin(mysqlReadOnly, { host: '127.0.0.1', port: 1, user: 'nobody', database: '' })
+for (let attempt = 0; attempt < 100 && ctx.tools.get('db_query') === undefined; attempt++) {
+  await new Promise(resolve => setTimeout(resolve, 10))
+}
+
+/**
+ * A settled root call carrying one metadata object, as the chat layer freezes it.
+ * Only the fields a card model reads are set.
+ * @param meta - the persisted metadata, or undefined for a call that has none.
+ * @param overrides - fields the case wants in a different state.
+ * @returns the frozen call node.
+ */
+function settledCall(meta, overrides = {}) {
+  return {
+    kind: 'tool-result',
+    seq: 1,
+    time: 0,
+    callId: 'call-1',
+    call: { name: 'db_query', argsRaw: '{}' },
+    callTime: 0,
+    content: [{ type: 'text', text: 'rows' }],
+    isError: false,
+    subCalls: [],
+    ...meta === undefined ? {} : { meta },
+    ...overrides,
+  }
+}
+
+/** The metadata one tool would persist for one canonical value. */
+function metaOf(name, args, value) {
+  const tool = ctx.tools.get(name)
+  assert.ok(tool, `${name} is registered`)
+  return tool.output.presentationMeta(args, value)
+}
+
+// The Host writes a card and the client reads it back: same columns in the same
+// order, the same rows flattened to cells, and the same facts beside them.
+const queryValue = {
+  columns: ['id', 'name'],
+  rows: [{ id: 1, name: 'a' }, { id: 2, name: 'b' }],
+  rowCount: 2,
+  truncated: false,
+  elapsedMs: 4,
+}
+const queryCard = dbCardModel(settledCall(metaOf('db_query', { sql: 'SELECT id, name' }, queryValue)))
+assert.equal(queryCard.kind, 'table', 'a query result draws a table')
+assert.deepEqual(queryCard.columns, ['id', 'name'], 'the columns keep the order the server answered')
+assert.deepEqual(queryCard.rows, [[1, 'a'], [2, 'b']], 'the rows arrive flattened against the columns')
+assert.equal(queryCard.rowCount, 2, 'the count the server answered travels')
+assert.equal(queryCard.truncated, false)
+assert.equal(queryCard.elapsedMs, 4)
+console.log(`round trip: db_query ${String(queryCard.rows.length)} row(s) read back`)
+
+// A listing, whose detail is the part a reader scans for.
+const databasesCard = dbCardModel(settledCall(metaOf('db_databases', {}, {
+  databases: [
+    { name: 'app', charset: 'utf8mb4', collation: 'utf8mb4_general_ci' },
+    { name: 'internal', charset: '', collation: '' },
+  ],
+})))
+assert.equal(databasesCard.kind, 'list')
+assert.deepEqual(databasesCard.items, [
+  { name: 'app', detail: 'utf8mb4/utf8mb4_general_ci' },
+  { name: 'internal' },
+], 'a listing carries each item and its detail, and no detail when there is none')
+assert.equal(databasesCard.total, 2)
+assert.equal(databasesCard.label, 'databases')
+console.log('round trip: db_databases listing read back')
+
+// Every way metadata can fail to describe a card: the generic row, never a
+// half-drawn one. These are the payloads a replayed session can really carry.
+const table = { card: 'table', columns: ['id'], rows: [[1]], rowCount: 1, truncated: false }
+assert.equal(dbCardModel(settledCall(undefined)), null, 'a call with no metadata')
+assert.equal(dbCardModel(settledCall({ card: 'sparkline', truncated: false })), null, 'a discriminator this version does not know')
+assert.equal(dbCardModel(settledCall({ ...table, columns: 'id' })), null, 'columns that is not a list')
+assert.equal(dbCardModel(settledCall({ ...table, columns: [7] })), null, 'a column name that is not a name')
+assert.equal(dbCardModel(settledCall({ ...table, rows: [[{ nested: true }]] })), null, 'a cell that is not a scalar')
+assert.equal(dbCardModel(settledCall({ ...table, rows: [[]] })), null, 'a row that is shorter than the columns')
+assert.equal(dbCardModel(settledCall({ ...table, rows: [[1, 2]] })), null, 'a row that is longer than the columns')
+assert.equal(dbCardModel(settledCall({ ...table, rowCount: 0.5 })), null, 'a row count that is not a whole number')
+assert.equal(dbCardModel(settledCall({ ...table, truncated: 'yes' })), null, 'a truncated flag that is not a flag')
+assert.equal(dbCardModel(settledCall({ ...table, card: 'list', label: 'tables', items: [{ name: 3 }], total: 1 })), null, 'an item whose name is not a name')
+assert.equal(dbCardModel(settledCall({ ...table, card: 'list', label: 'views', items: [], total: 0 })), null, 'a listing whose label is neither')
+console.log('malformed metadata: twelve payloads, all falling back')
+
+// The states a call itself can be in, which no metadata can rescue.
+const goodMeta = metaOf('db_query', { sql: 'SELECT 1' }, queryValue)
+assert.equal(dbCardModel(settledCall(goodMeta, { isError: true })), null, 'a call that failed')
+assert.equal(
+  dbCardModel({ callId: 'c', name: 'db_query', argsRaw: '{}', turn: 1, step: 1, time: 0, subCalls: [] }),
+  null,
+  'a call still running',
+)
+assert.equal(dbCardModel(settledCall(goodMeta, { parentCallId: 'parent' })), null, 'a call dispatched inside another')
+console.log('call states: failed, running, and nested all fall back')
+
+// The text the generic row shows, so the fallback is never an empty box.
+assert.equal(genericText(settledCall(undefined)), 'rows', 'the generic row shows the result text')
+assert.equal(errorText(settledCall(undefined)), '', 'a call that did not fail has no failure text')
+assert.equal(
+  errorText(settledCall(undefined, { isError: true, error: { name: 'Error', code: 'E_FAIL', reason: 'the pool is closed' } })),
+  'the pool is closed',
+  'a failed call shows why it failed',
+)
+assert.equal(
+  errorText(settledCall(undefined, { isError: true, error: { name: 'Error', code: 'E_FAIL' } })),
+  'E_FAIL',
+  'a failure with no reason shows its code',
+)
+console.log('fallback text: a row that fell back is never empty')
+
+// The metadata is written into the session log, so an unbounded card is a session
+// log that grows with whatever a query happened to return.
+const many = {
+  columns: ['id'],
+  rows: Array.from({ length: 500 }, (_, index) => ({ id: index })),
+  rowCount: 500,
+  truncated: false,
+  elapsedMs: 1,
+}
+const manyMeta = metaOf('db_query', { sql: 'SELECT id' }, many)
+assert.equal(manyMeta.truncated, true, 'a card past its bound says it was cut')
+assert.ok(manyMeta.rows.length < 500, 'a card carries fewer rows than the server answered')
+assert.ok(JSON.stringify(manyMeta).length <= 32 * 1024, 'a card stays within the byte bound')
+assert.equal(dbCardModel(settledCall(manyMeta)).truncated, true, 'and the client reads that cut back')
+console.log(`bounds: ${String(manyMeta.rows.length)} of 500 rows carried, metadata ${String(JSON.stringify(manyMeta).length)} bytes`)
+
+await ctx.fiber.dispose()
+console.log('card check passed')
+process.exit(0)

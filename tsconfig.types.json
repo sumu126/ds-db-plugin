@@ -12,6 +12,8 @@
       "@deepseek-ai/dsh-client-ui-primitives": ["../deepseek-harness/packages/client/ui-primitives/lib/types/index.d.ts"],
       "@deepseek-ai/dsh-client-ui-renderer/client": ["../deepseek-harness/packages/client/ui-renderer/lib/types/client/index.d.ts"],
       "@deepseek-ai/dsh-client-ui-settings/client": ["../deepseek-harness/packages/client/ui-settings/lib/types/client/index.d.ts"],
+      "@deepseek-ai/dsh-client-ui-tool/client": ["../deepseek-harness/packages/client/ui-tool/lib/types/client/index.d.ts"],
+      "@deepseek-ai/dsh-client-ui-chat/client": ["../deepseek-harness/packages/client/ui-chat/lib/types/client/index.d.ts"],
       "@deepseek-ai/dsh-client-locale/client": ["../deepseek-harness/packages/client/locale/lib/types/client/index.d.ts"],
       "@deepseek-ai/dsh-client-store": ["../deepseek-harness/packages/client/store/lib/types/index.d.ts"],
       "@deepseek-ai/dsh-api-remotes/client": ["../deepseek-harness/packages/api/remotes/lib/types/client/index.d.ts"]

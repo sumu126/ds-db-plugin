@@ -24,11 +24,18 @@ import {
 } from '../contract.ts'
 
 import { en, zh, type DbLocaleKey } from './locales.ts'
+import { TOOL_NS, en as toolEn, zh as toolZh, type ToolLocaleKey } from './tool-locales.ts'
+import { registerToolRows } from './DbToolRows.tsx'
+
+// Type-only: pulls the Tool layer's SlotMap merge (the 'tool.call.toolview' entry).
+import type {} from '@deepseek-ai/dsh-client-ui-tool/client'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
     /** Copy of the database settings page. */
     'settings.db': DbLocaleKey
+    /** Copy of the tool-call rows this plugin draws. */
+    'tool.db': ToolLocaleKey
   }
 }
 
@@ -46,6 +53,7 @@ export const inject = [
  */
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-ds-db: copy dictionaries')
+  ctx.effect(() => ctx.locale.register(TOOL_NS, { zh: toolZh, en: toolEn }), 'dsh-ds-db: tool row copy')
 
   const scope = ctx.settingsScope.bind<DatabaseSettings>({ namespace: DB_SETTINGS_NAMESPACE })
   const credentials: DbCredentialsFace = {
@@ -73,6 +81,10 @@ export function apply(ctx: ClientContext): void {
     locale: NS,
     inject: (): DbPageFace => ({ hooks: { dbPage: controller.snapshot }, ...controller.actions() }),
   }, DatabaseSettingsPage))
+
+  // The rows live on the same client entry as the page: the slot is keyed by wire
+  // tool name, so nothing else has to be told which tools this plugin registers.
+  registerToolRows(ctx)
 }
 
 /**
