@@ -49,6 +49,6 @@
 | M3 | 配置字段 `extra` + `configFields` + 方言清单路由 + 页面渲染 | ✅ |
 | M4 | PostgreSQL 仓外参考实现 | ✅ 契约审计通过（无需数据库服务） |
 | M5 | 方言自检套件 `auditDialect()` | ✅ 接入 `npm test`（24 例） |
-| M6 | 可选工具 `db_sample` / `db_explain` 按能力注册 | ✅ |
+| M6 | 可选工具 `db_sample` / `db_explain` 按能力注册；结果卡片（`presentationMeta` + `tool.call.toolview`）与 `verify:cards` | ✅ |
 
 新增文件：`src/dialect-audit.ts`（自检）、`src/dialect-catalog.ts`（已知方言包清单）。

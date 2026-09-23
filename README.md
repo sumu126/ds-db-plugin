@@ -31,6 +31,10 @@
 
 `db_sample` / `db_explain` 只在方言声明了对应能力时才注册——不支持的方言，模型工具列表里根本看不到它们。
 
+**结果在会话里怎么呈现**：`db_query` 与 `db_sample` 画成**结果表**（列名、单元格、服务器报的行数、截断标记、耗时），`db_tables` 与 `db_databases` 画成**清单**（每项一行，带类型/引擎/注释之类的细节）。`db_describe` 与 `db_explain` 保持通用行——它们的价值在文本里，不在表格里。
+
+卡片画什么，取自 Host 为每次调用持久化的 `presentationMeta`（纯函数、有界，随会话日志一起回放）；客户端**逐字段校验后才画**，读不懂就回退通用行——所以旧版本记录的会话、失败的调用、还在跑的调用、以及嵌套分发的调用，都不会画出半张卡片。
+
 ## 组成
 
 核心**不含任何数据库类型**：MySQL 也是一个方言包，和第三方的形状完全一样。
@@ -285,17 +289,19 @@ npm test                  # 方言包的行为测试与契约审计（24 例）
 npm run verify:host       # 挂真实 ToolRuntime：方言以独立插件挂载后跑通全部断言
 npm run verify:settings   # 挂真实设置服务：工具读到的是用户保存的文档，而非组合兜底
 npm run verify:loader     # 经 Loader + 真实 cordis.yml 组装：加载、注入、卸载
+npm run verify:cards      # 两端往返：Host 写的会话卡片，客户端读回同一张
 npm run build             # 核心 + 浏览器半边 + 每个方言包
 npm run overlay           # 生成 .dev/cordis.yml（两行：方言包 + 核心）
 ```
 
-三道 `verify` 各自覆盖不同的一半，缺一道就有一类错误能长期隐身：
+四道 `verify` 各自覆盖不同的一半，缺一道就有一类错误能长期隐身：
 
 | 检查 | 挂什么 | 抓什么 |
 | --- | --- | --- |
-| `verify:host` | 真实 ToolRuntime，**无**设置服务 | 工具注册、描述与拒绝文本、能力降级、多连接寻址、取消 |
+| `verify:host` | 真实 ToolRuntime，**无**设置服务 | 工具注册、描述与拒绝文本、能力降级、多连接寻址、取消、输出 schema 与卡片元数据 |
 | `verify:settings` | + 真实设置服务与 `~/.dsh/settings.yaml` | 工具读到的是**用户文档**而不是组合兜底 |
 | `verify:loader` | 真实 Loader + 一次性 `DSH_HOME` 的 `cordis.yml` | 组合本身：行能否解析、注入是否满足、卸载是否干净 |
+| `verify:cards` | Host + **浏览器半边**的卡片模型（Node 即可，无 DOM） | 两端往返：Host 写的元数据，客户端读回同一张卡片；畸形元数据一律回退 |
 
 启动冒烟：
 
@@ -304,7 +310,7 @@ cd ../deepseek-harness
 pnpm dsh web --patch <插件目录>/.dev/cordis.yml
 ```
 
-`tsconfig.json` 与 `tsconfig.types.json` 里的 `../deepseek-harness/...` 是**开发期约定**：`typecheck`、`test`、`verify:host`、`verify:settings`、`verify:loader` 都需要旁边有一份 harness checkout，换机器要同步调整这些 `paths`。**`npm run build` 与用户安装不受影响**——产物里的 harness 依赖是外部的，由宿主提供。
+`tsconfig.json` 与 `tsconfig.types.json` 里的 `../deepseek-harness/...` 是**开发期约定**：`typecheck`、`test`、`verify:host`、`verify:settings`、`verify:loader`、`verify:cards` 都需要旁边有一份 harness checkout，换机器要同步调整这些 `paths`。**`npm run build` 与用户安装不受影响**——产物里的 harness 依赖是外部的，由宿主提供。
 
 改动落在哪一层：
 
@@ -328,9 +334,10 @@ pnpm dsh web --patch <插件目录>/.dev/cordis.yml
   **触发条件**：出现任何需要**独立发布**的仓外方言时，把 `dialect` / `sql-guard` / `value` / `dialect-audit` 抽成 `dsh-db-dialect-api`，两个消费者改为只依赖它。验收标准：`grep -rn "dsh-ds-db/src" dialects/` 为空，且 `dialects/*/package.json` 不再出现 `dsh-ds-db`。
 - **远程调用面走低层通道——有意偏离**：设置页用 `connection.fetch.register` 的自定义路由 + 裸 `fetch`，而不是 Typert `@Remote`（第一方 `file-upload`、`session-log-export` 是同款用法）。原因是**仓外插件无法运行仓内的 typert 生成管线**（需要 `./typert`、`./remote` 产物与 generator 参与构建）。代价是失去生成类型与统一失败词汇，`contract.ts` 里的 wire 形状是手写的——客户端因此必须自己补齐字段（`completeDescriptor`）。**触发条件**：插件进入第一方仓库，或 typert 提供面向仓外插件的生成入口。
 - **MySQL 上的取消是「退役会话」而非「中断语句」**：mysql2 的 Promise pool 没有 `destroy()`、只有 `end()`，所以中止一次调用会让池关闭、而 `COM_QUIT` 排在正在执行的语句之后——**服务端那条语句会跑完**；随后该会话被淘汰、下一次调用重建连接。要真正中断需要方言自己持有单条连接（`pool.getConnection()` → `conn.query()` → abort 时 `conn.destroy()`）
-- **没有查询结果卡片与调用卡片**：工具结果走通用呈现
+- **卡片只覆盖四个工具**：`db_describe` 与 `db_explain` 走通用行（有意——收益低，而认领一个 wire 工具名就接管那个调用的全部状态）。要加，给工具加 `presentationMeta` 并在 `src/client/DbToolRows.tsx` 认领 key，两处都要动
+- **卡片认领即接管**：`tool.call.toolview` 是 keyed slot，注册 `db_query` 就接管该工具的**所有**状态渲染，包括还在跑、失败、嵌套分发——所以视图必须有回退分支（现在的四个都有）
 - **浏览器半边需要重新构建**：改 `src/client` 后必须 `npm run build`
-- 作为仓外插件，它不参与 `deepseek-harness` 仓库的 gate（每文件 100% 覆盖率等）；`typecheck`、`npm test`、`verify:host`、`verify:settings`、`verify:loader` 是本工程自带的检查
+- 作为仓外插件，它不参与 `deepseek-harness` 仓库的 gate（每文件 100% 覆盖率等）；`typecheck`、`npm test`、`verify:host`、`verify:settings`、`verify:loader`、`verify:cards` 是本工程自带的检查
 
 ## 许可
 
