@@ -134,7 +134,10 @@ export function apply(ctx: Context, config: Config): void {
       access,
       dialectFor: readDialectFor,
       described: dialectFacts(registry, initialDialect),
-      settings: readSettings,
+      // A thunk, not the current function: `readSettings` is reassigned when the
+      // settings provider hands its source over, so passing the value would pin
+      // the tools to the composition entry forever.
+      settings: () => readSettings(),
     })
   }
   ctx.effect(() => {

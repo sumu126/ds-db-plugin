@@ -53,7 +53,9 @@ export const ProfileSchema: z<ConnectionProfile> = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   dialect: z.string(),
-  extra: z.dict(z.union([z.string(), z.number()])),
+  // A connection saved before the field existed carries none, and refusing it
+  // would hide the whole section behind one missing key.
+  extra: z.dict(z.union([z.string(), z.number()])).default({}),
   host: z.string(),
   port: z.natural().max(65535),
   user: z.string(),
@@ -151,10 +153,12 @@ export function compositionEntry(config: Config): DatabaseSettings {
 /**
  * The User Settings section the database page edits.
  *
- * The page writes complete records: every connection it saves carries all
- * fields, so the section schema validates strictly rather than defaulting.
+ * Both keys take a default, because a user layer holds only what the user
+ * changed: a document that carries connections but no `activeId` is normal, and
+ * a section that refused it would leave the tools reading the composition layer
+ * instead of everything the user saved.
  */
 export const DatabaseSettingsSchema: z<DatabaseSettings> = z.object({
-  connections: z.array(ProfileSchema),
-  activeId: z.string(),
+  connections: z.array(ProfileSchema).default([]),
+  activeId: z.string().default(''),
 })

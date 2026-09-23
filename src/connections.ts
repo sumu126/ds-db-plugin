@@ -76,8 +76,13 @@ export interface ConnectionSummary {
  * @throws {Error} when nothing usable is saved, naming what is saved otherwise.
  */
 export function activeConnection(settings: DatabaseSettings): ConnectionProfile {
-  const active = settings.connections.find(profile => profile.id === settings.activeId)
-  if (active !== undefined) return active
+  // An empty id means the first saved connection, the same way an empty dialect
+  // means the first registered one: neither names anything, so both fall to the
+  // only sensible referent instead of refusing.
+  const wanted = settings.activeId.trim().length === 0
+    ? settings.connections[0]
+    : settings.connections.find(profile => profile.id === settings.activeId)
+  if (wanted !== undefined) return wanted
   const only = settings.connections.length === 1 ? settings.connections[0] : undefined
   if (only !== undefined) return only
   const names = settings.connections.map(profile => profile.name).join(', ')

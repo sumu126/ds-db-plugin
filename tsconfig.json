@@ -20,6 +20,7 @@
       "@deepseek-ai/dsh-tools/src/*": ["../deepseek-harness/packages/core/tools/src/*"],
       "@deepseek-ai/dsh-system-prompt": ["../deepseek-harness/packages/core/system-prompt/src/index.ts"],
       "@deepseek-ai/dsh-settings": ["../deepseek-harness/packages/settings/settings/src/index.ts"],
+      "@deepseek-ai/dsh-settings-file": ["../deepseek-harness/packages/settings/settings-file/src/index.ts"],
       "@deepseek-ai/dsh-credentials": ["../deepseek-harness/packages/credentials/credentials/src/index.ts"],
       "@deepseek-ai/dsh-credentials/types": ["../deepseek-harness/packages/credentials/credentials/src/types.ts"],
       "@deepseek-ai/dsh-client-ui-slots": ["../deepseek-harness/packages/client/ui-slots/src/index.ts"],

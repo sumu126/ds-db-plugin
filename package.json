@@ -38,7 +38,8 @@
     "test": "node --import tsx/esm --test dialects/mysql/tests/sql-guard.test.ts dialects/mysql/tests/dialect.test.ts dialects/mysql/tests/contract-audit.test.ts",
     "test:dialects": "npm --prefix dialects/mysql test",
     "overlay": "node scripts/dev-overlay.mjs",
-    "verify:host": "node --import tsx/esm scripts/verify-host.mjs"
+    "verify:host": "node --import tsx/esm scripts/verify-host.mjs",
+    "verify:settings": "node --import tsx/esm scripts/verify-settings.mts"
   },
   "dependencies": {
     "dsh-dialect-mysql": "file:dialects/mysql"
