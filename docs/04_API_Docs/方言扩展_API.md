@@ -54,6 +54,8 @@ dsh plugin --profile web add ./dsh-dialect-postgres
 | --- | --- | --- |
 | `name` | `string` | 注册表键，配置里 `dialect: postgres` 引用它 |
 | `label` | `string` | 模型可见的自称，如 `PostgreSQL` |
+| `description` | `string`（可选） | 一句自述，设置页的类型卡片显示它 |
+| `connectionDefaults` | `ConnectionDefaults`（可选） | 你的库的 `host`/`port`/`user`/`database`/`passwordEnv` 默认值；页面用它预填新连接，连接上留空的字段也回落到它 |
 | `systemDatabases` | `readonly string[]` | `db_databases` 默认隐藏的系统库 |
 | `rowBoundHint` | `string` | 告诉模型该库怎么限制行数，如 `LIMIT` / `FETCH FIRST` |
 | `capabilities` | `ReadonlySet<DialectCapability>` | 本方言真正提供的能力 |

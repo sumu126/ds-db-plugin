@@ -11,6 +11,12 @@ import { assertReadOnlyStatement, familiesPhrase } from 'dsh-ds-db/src/sql-guard
 test('publishes the facts the model-facing text is written from', () => {
   assert.equal(MYSQL_DIALECT.name, 'mysql')
   assert.equal(MYSQL_DIALECT.label, 'MySQL')
+  // The type describes itself and names its own port and account: the plugin
+  // carries neither, so a deployment that installs no dialect gets no guess.
+  assert.equal(typeof MYSQL_DIALECT.description, 'string')
+  assert.deepEqual(MYSQL_DIALECT.connectionDefaults, {
+    host: '127.0.0.1', port: 3306, user: 'root', passwordEnv: 'DSH_MYSQL_PASSWORD',
+  })
   assert.equal(MYSQL_DIALECT.rowBoundHint, 'LIMIT')
   assert.deepEqual(
     [...MYSQL_DIALECT.systemDatabases],

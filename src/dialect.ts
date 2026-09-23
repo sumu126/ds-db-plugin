@@ -14,6 +14,7 @@
  */
 
 import { Service, type Context } from '@deepseek-ai/cordis'
+import type { ConnectionDefaults } from './contract.ts'
 import type { ReadOnlyRules } from './sql-guard.ts'
 import type { DbRow, DbScalar } from './value.ts'
 
@@ -217,6 +218,21 @@ export interface DatabaseDialect {
   readonly name: string
   /** How the dialect names itself in model-facing text, such as `MySQL`. */
   readonly label: string
+  /**
+   * One line about this type, shown on the settings page's type chooser.
+   *
+   * The plugin cannot write it: only the dialect knows what it connects
+   * through and what it offers.
+   */
+  readonly description?: string
+  /**
+   * Values this server gives the shared connection fields.
+   *
+   * A port and an account name are facts about a server, not about read-only
+   * database access, so the plugin declares no default for them: a dialect that
+   * names none leaves the field for the user to fill.
+   */
+  readonly connectionDefaults?: ConnectionDefaults
   /** How this dialect's statements are judged before execution. */
   readonly rules: ReadOnlyRules
   /** The metadata abilities this dialect really provides; tools degrade on the rest. */
@@ -302,6 +318,13 @@ export interface DatabaseDialect {
  * and registers itself. Registration is an effect: {@link register} returns the
  * disposer that removes the dialect again.
  */
+/**
+ * Waiting key for "any dialect": a connection that names no database type
+ * addresses whichever dialect registers first, so it waits for one rather than
+ * for a name.
+ */
+const ANY_DIALECT = ''
+
 export class DatabaseDialectRegistry extends Service {
   private readonly dialects = new Map<string, DatabaseDialect>()
   private readonly waiting = new Map<string, Set<() => void>>()
@@ -343,14 +366,29 @@ export class DatabaseDialectRegistry extends Service {
       throw new Error(`database dialect "${dialect.name}" declares "explain" but implements no explain()`)
     }
     this.dialects.set(dialect.name, dialect)
-    // The listener runs synchronously here, so a caller that registers a tool
-    // set from it sees the dialect before any call can arrive.
-    const waiting = this.waiting.get(dialect.name)
-    if (waiting !== undefined) {
-      this.waiting.delete(dialect.name)
-      for (const listener of waiting) listener()
-    }
+    // Listeners run synchronously here, so a caller that registers a tool set
+    // from one sees the dialect before any call can arrive. The empty key waits
+    // for any dialect, which is what a connection naming none needs.
+    this.wake(dialect.name)
+    this.wake(ANY_DIALECT)
     return () => { this.dialects.delete(dialect.name) }
+  }
+
+  /** Run and clear every listener waiting on one key. */
+  private wake(name: string): void {
+    const waiting = this.waiting.get(name)
+    if (waiting === undefined) return
+    this.waiting.delete(name)
+    for (const listener of waiting) listener()
+  }
+
+  /**
+   * The dialect a connection with no named type addresses.
+   * @returns the first registered dialect in name order, or undefined when none is registered.
+   */
+  first(): DatabaseDialect | undefined {
+    const [name] = this.names()
+    return name === undefined ? undefined : this.dialects.get(name)
   }
 
   /**
@@ -364,13 +402,15 @@ export class DatabaseDialectRegistry extends Service {
    * @returns the disposer removing the wait again.
    */
   whenRegistered(name: string, listener: () => void): () => void {
-    if (this.dialects.has(name)) {
+    const key = name.trim().length === 0 ? ANY_DIALECT : name
+    const satisfied = key === ANY_DIALECT ? this.dialects.size > 0 : this.dialects.has(key)
+    if (satisfied) {
       listener()
       return () => {}
     }
-    const waiting = this.waiting.get(name) ?? new Set<() => void>()
+    const waiting = this.waiting.get(key) ?? new Set<() => void>()
     waiting.add(listener)
-    this.waiting.set(name, waiting)
+    this.waiting.set(key, waiting)
     return () => { waiting.delete(listener) }
   }
 
@@ -434,7 +474,10 @@ const UNREGISTERED_RULES: ReadOnlyRules = {
  * @returns the dialect's facts, or the stand-in when nothing is registered yet.
  */
 export function dialectFacts(registry: DatabaseDialectRegistry, name: string): DialectFacts {
-  const dialect = registry.get(name)
+  const key = name.trim()
+  // An unnamed dialect is the deployment's first registered one, exactly as
+  // `resolveDialect` reads it, so descriptions match the calls they describe.
+  const dialect = key.length === 0 ? registry.first() : registry.get(key)
   if (dialect !== undefined) {
     return {
       label: dialect.label,
@@ -446,7 +489,9 @@ export function dialectFacts(registry: DatabaseDialectRegistry, name: string): D
     }
   }
   return {
-    label: name,
+    // A description still has to read as English while the type is unknown, so
+    // the stand-in names the connection rather than printing an empty name.
+    label: name.trim().length === 0 ? 'configured' : name,
     capabilities: new Set<DialectCapability>(),
     configFields: [],
     rowBoundHint: '',
@@ -466,10 +511,16 @@ export function dialectFacts(registry: DatabaseDialectRegistry, name: string): D
  * @throws {Error} when nothing is registered under that name.
  */
 export function resolveDialect(registry: DatabaseDialectRegistry, name: string): DatabaseDialect {
-  const dialect = registry.get(name)
+  const key = name.trim()
+  // An unnamed dialect is the deployment's first registered one: the plugin
+  // names no database type of its own, so a composition layer need not either.
+  const dialect = key.length === 0 ? registry.first() : registry.get(key)
   if (dialect !== undefined) return dialect
   const registered = registry.names()
+  if (key.length === 0) {
+    throw new Error('no database dialect is registered; install a dialect package, such as dsh-dialect-mysql')
+  }
   throw new Error(registered.length === 0
-    ? `no database dialect is registered, so "${name}" cannot be resolved`
-    : `database dialect "${name}" is not registered; registered dialects: ${registered.join(', ')}`)
+    ? `no database dialect is registered, so "${key}" cannot be resolved`
+    : `database dialect "${key}" is not registered; registered dialects: ${registered.join(', ')}`)
 }

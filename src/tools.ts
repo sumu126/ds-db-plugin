@@ -17,7 +17,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { MysqlSettings } from './contract.ts'
+import type { ConnectionProfile } from './contract.ts'
 import type { DatabaseAccess } from './connection.ts'
 import type { DatabaseDialect, DialectCapability, DialectFacts, DialectIndexRow } from './dialect.ts'
 import { assertReadOnlyStatement, familiesPhrase } from './sql-guard.ts'
@@ -36,7 +36,7 @@ export interface DatabaseToolsFace {
    */
   described: DialectFacts
   /** Current resolved settings section. */
-  settings: () => MysqlSettings
+  settings: () => ConnectionProfile
 }
 
 /**
@@ -69,7 +69,7 @@ function optionalArgument(value: string | undefined): string | undefined {
  * @returns the database to address.
  * @throws {Error} when neither the call nor the settings name a database.
  */
-function resolveDatabase(settings: MysqlSettings, requested: string | undefined, dialect: DatabaseDialect): string {
+function resolveDatabase(settings: ConnectionProfile, requested: string | undefined, dialect: DatabaseDialect): string {
   const database = optionalArgument(requested) ?? optionalArgument(settings.database)
   if (database === undefined) {
     throw new Error(`no database selected: pass a database argument or set the default database of the connection in use on the database settings page`)

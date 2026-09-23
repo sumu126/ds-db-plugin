@@ -8,8 +8,8 @@
  * address; every operation resolves the active connection at that moment, so a
  * switch on the page reaches the next tool call without a reload. The servers
  * these connections run against come from the dialect registry: this plugin
- * provides the registry and registers its own MySQL dialect into it, and a
- * further dialect ships as its own package that registers itself.
+ * provides the registry and ships no database type, so every type — MySQL
+ * included — arrives as a package that registers itself.
  *
  * @module dsh-ds-db
  */
@@ -20,15 +20,17 @@ import type {} from '@deepseek-ai/dsh-credentials'
 import type {} from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-tools'
 import { DatabaseAccess } from './connection.ts'
-import { MYSQL_DIALECTS_PATH, MYSQL_SETTINGS_NAMESPACE, MYSQL_TEST_PATH, type DatabaseSettings, type DialectCatalog, type MysqlSettings, type ProbeRequest } from './contract.ts'
+import {
+  DB_DIALECTS_PATH, DB_SETTINGS_NAMESPACE, DB_TEST_PATH, UNSET_PORT,
+  type ConnectionProfile, type DatabaseSettings, type DialectCatalog, type ProbeRequest,
+} from './contract.ts'
 import { KNOWN_DIALECT_PACKAGES } from './dialect-catalog.ts'
 import { DatabaseDialectRegistry, dialectFacts, resolveDialect, type DatabaseConnection, type DatabaseDialect } from './dialect.ts'
-import { DEFAULT_DIALECT_NAME } from './dialect-catalog.ts'
 import { compositionEntry, Config, DatabaseSettingsSchema } from './settings.ts'
 import { applyDatabaseTools } from './tools.ts'
 
-export type { DatabaseSettings, MysqlSettings } from './contract.ts'
-export type { Config as MysqlConfig } from './settings.ts'
+export type { ConnectionProfile, DatabaseSettings } from './contract.ts'
+export type { Config as DatabaseConfig } from './settings.ts'
 
 export { Config } from './settings.ts'
 
@@ -78,7 +80,7 @@ interface ProbeHost {
  * @returns the connection every tool call runs against.
  * @throws {Error} when nothing usable is saved, naming what is saved otherwise.
  */
-export function activeConnection(settings: DatabaseSettings): MysqlSettings {
+export function activeConnection(settings: DatabaseSettings): ConnectionProfile {
   const active = settings.connections.find(profile => profile.id === settings.activeId)
   if (active !== undefined) return active
   const only = settings.connections.length === 1 ? settings.connections[0] : undefined
@@ -106,7 +108,7 @@ export function apply(ctx: Context, config: Config): void {
   // the whole configuration, and the configuration page reports the namespace
   // as unavailable rather than editing a section nobody serves.
   ctx.inject(['settings'], (settingsCtx) => {
-    settingsCtx.settings.installSection(ctx, MYSQL_SETTINGS_NAMESPACE, DatabaseSettingsSchema, entry, {
+    settingsCtx.settings.installSection(ctx, DB_SETTINGS_NAMESPACE, DatabaseSettingsSchema, entry, {
       setSource: (source) => { readSettings = source },
       // Nothing is derived from the source besides the reads above.
       onChange: () => {},
@@ -118,11 +120,13 @@ export function apply(ctx: Context, config: Config): void {
   // through `inject: ['databaseDialects']`.
   const registry = new DatabaseDialectRegistry(ctx)
   const readDialect = (): DatabaseDialect => resolveDialect(registry, activeConnection(readSettings()).dialect)
-  const initialDialect = entry.connections.find(profile => profile.id === entry.activeId)?.dialect
-    ?? DEFAULT_DIALECT_NAME
+  // The composition entry names the dialect it starts on, and an empty one
+  // means the first dialect the deployment registers — the plugin names no
+  // database type, so it names no default type either.
+  const initialDialect = entry.connections.find(profile => profile.id === entry.activeId)?.dialect ?? ''
 
   const access = new DatabaseAccess({
-    connection: async () => await resolveConnection(ctx, activeConnection(readSettings())),
+    connection: async () => await resolveConnection(ctx, activeConnection(readSettings()), readDialect()),
     dialect: readDialect,
   })
   ctx.effect(() => () => { void access.dispose() }, 'ds-db: database session')
@@ -163,25 +167,25 @@ export function apply(ctx: Context, config: Config): void {
     const connection = Reflect.get(webCtx, 'connection') as ProbeHost | undefined
     if (connection === undefined) return
     webCtx.effect(() => connection.fetch.register({
-      path: MYSQL_TEST_PATH,
+      path: DB_TEST_PATH,
       methods: ['POST'],
       requestBody: 'buffered',
       fetch: async request => Response.json(await probeRoute(ctx, registry, readSettings, request), {
         headers: { 'cache-control': 'no-store' },
       }),
-    }), `ds-db: POST ${MYSQL_TEST_PATH}`)
+    }), `ds-db: POST ${DB_TEST_PATH}`)
 
     // The page's type chooser reads the registered dialects from here, so a
     // dialect that arrives in its own package shows up without this plugin
     // knowing its name in advance.
     webCtx.effect(() => connection.fetch.register({
-      path: MYSQL_DIALECTS_PATH,
+      path: DB_DIALECTS_PATH,
       methods: ['GET'],
       requestBody: 'buffered',
       fetch: async (): Promise<Response> => Response.json(dialectCatalog(registry), {
         headers: { 'cache-control': 'no-store' },
       }),
-    }), `ds-db: GET ${MYSQL_DIALECTS_PATH}`)
+    }), `ds-db: GET ${DB_DIALECTS_PATH}`)
   })
 }
 
@@ -199,7 +203,11 @@ export function dialectCatalog(registry: DatabaseDialectRegistry): DialectCatalo
       return {
         name: dialect.name,
         label: dialect.label,
+        // The type describes itself: only the dialect knows what it connects
+        // through and what it offers, so the plugin never writes this line.
+        ...dialect.description === undefined ? {} : { description: dialect.description },
         capabilities: [...dialect.capabilities],
+        connectionDefaults: dialect.connectionDefaults ?? {},
         configFields: dialect.configFields.map(field => ({
           key: field.key,
           kind: field.kind,
@@ -223,20 +231,44 @@ export function dialectCatalog(registry: DatabaseDialectRegistry): DialectCatalo
  * The fields are the profile's; what they mean to the server is the dialect's
  * affair, so a dialect whose server names its database differently reads
  * `database` its own way.
+ *
+ * A field the profile leaves empty falls back to what the dialect declares for
+ * it, because a port and an account name are facts about one server. A field
+ * neither of them fills is a refusal that names it, not a default the plugin
+ * would have to guess.
  * @param ctx - the plugin context, read for the optional credential provider.
  * @param profile - the connection a dialect session is opened against.
+ * @param dialect - the dialect that connection is addressed through.
  * @returns the resolved connection.
+ * @throws {Error} when no host, port, or account can be established.
  */
-async function resolveConnection(ctx: Context, profile: MysqlSettings): Promise<DatabaseConnection> {
+async function resolveConnection(
+  ctx: Context,
+  profile: ConnectionProfile,
+  dialect: DatabaseDialect,
+): Promise<DatabaseConnection> {
+  const declared = dialect.connectionDefaults
+  const host = profile.host.trim().length > 0 ? profile.host.trim() : declared?.host ?? ''
+  const port = profile.port !== UNSET_PORT ? profile.port : declared?.port ?? UNSET_PORT
+  const user = profile.user.trim().length > 0 ? profile.user.trim() : String(declared?.user ?? '')
+  const passwordEnv = profile.passwordEnv.trim().length > 0
+    ? profile.passwordEnv
+    : declared?.passwordEnv ?? profile.passwordEnv
+  const missing = host.length === 0
+    ? 'host'
+    : port === UNSET_PORT ? 'port' : user.length === 0 ? 'user' : ''
+  if (missing.length > 0) {
+    throw new Error(`connection "${profile.name}" has no ${missing}, and ${dialect.label} declares no default for it`)
+  }
   const credentials = ctx.get('credentials')
   const resolved = credentials === undefined
     ? undefined
-    : await credentials.resolve(credentialRef(profile.passwordEnv))
+    : await credentials.resolve(credentialRef(passwordEnv))
   const database = profile.database.trim()
   return {
-    host: profile.host,
-    port: profile.port,
-    user: profile.user,
+    host,
+    port,
+    user,
     password: resolved?.value ?? '',
     ...database.length === 0 ? {} : { database },
     extra: profile.extra,
@@ -287,11 +319,11 @@ async function probeRoute(
 async function probeProfile(
   ctx: Context,
   registry: DatabaseDialectRegistry,
-  profile: MysqlSettings,
+  profile: ConnectionProfile,
 ): Promise<ProbePayload> {
   try {
-    const connection = await resolveConnection(ctx, profile)
     const dialect = resolveDialect(registry, profile.dialect)
+    const connection = await resolveConnection(ctx, profile, dialect)
     const access = new DatabaseAccess({ connection: async () => connection, dialect: () => dialect })
     try {
       const probe = await access.probe()

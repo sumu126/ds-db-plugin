@@ -24,12 +24,7 @@ export const zh = {
   passwordSet: '密码已配置',
   passwordUnset: '密码未配置',
   dialectTitle: '选择数据库类型',
-  dialectHint: '选择要连接的数据库；更多类型将在后续版本支持。',
-  dialectMysqlDesc: '通过 mysql2 驱动连接，支持库、表、结构与只读查询。',
-  dialectPostgres: 'PostgreSQL',
-  dialectPostgresDesc: '即将支持。',
-  dialectOracle: 'Oracle',
-  dialectOracleDesc: '即将支持。',
+  dialectHint: '类型由方言包提供；名字与说明都来自方言自己，未安装的类型会给出要装的包名。',
   comingSoon: '即将支持',
   loading: '正在读取可用的数据库类型…',
   noDialect: '当前没有可用的数据库类型。',
@@ -43,7 +38,7 @@ export const zh = {
   host: '主机',
   hostHint: '数据库服务器地址，例如 127.0.0.1 或 db.internal。',
   port: '端口',
-  portHint: '服务器 TCP 端口，MySQL 默认 3306。',
+  portHint: '服务器 TCP 端口；新建时按所选类型的默认值预填。',
   user: '账号',
   userHint: '插件连接使用的账号，建议使用只有查询权限的只读账号。',
   database: '默认数据库',
@@ -90,12 +85,7 @@ export const en: Record<keyof typeof zh, string> = {
   passwordSet: 'Password configured',
   passwordUnset: 'Password not configured',
   dialectTitle: 'Choose a database type',
-  dialectHint: 'Pick the server to connect to; more types arrive in later versions.',
-  dialectMysqlDesc: 'Connects through the mysql2 driver, with databases, tables, structure, and read-only queries.',
-  dialectPostgres: 'PostgreSQL',
-  dialectPostgresDesc: 'Coming soon.',
-  dialectOracle: 'Oracle',
-  dialectOracleDesc: 'Coming soon.',
+  dialectHint: 'Types come from dialect packages; each names and describes itself, and one that is not installed shows the package to install.',
   comingSoon: 'Coming soon',
   loading: 'Reading the available database types…',
   noDialect: 'No database type is available.',
@@ -109,7 +99,7 @@ export const en: Record<keyof typeof zh, string> = {
   host: 'Host',
   hostHint: 'Database server address, such as 127.0.0.1 or db.internal.',
   port: 'Port',
-  portHint: 'Server TCP port; 3306 for MySQL by default.',
+  portHint: 'Server TCP port; a new connection is pre-filled from the chosen type.',
   user: 'User',
   userHint: 'Account the plugin connects as; a read-only account with SELECT privileges is the intended deployment.',
   database: 'Default database',
@@ -139,4 +129,4 @@ export const en: Record<keyof typeof zh, string> = {
 }
 
 /** One dictionary key of the database settings page. */
-export type MysqlLocaleKey = keyof typeof zh
+export type DbLocaleKey = keyof typeof zh

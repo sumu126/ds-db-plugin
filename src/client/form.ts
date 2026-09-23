@@ -13,7 +13,7 @@
 import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { SettingsPathOpView } from '@deepseek-ai/dsh-api-remotes/client'
 import type { SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client'
-import { type DatabaseSettings, type DialectCatalog, type DialectDescriptor, type MysqlSettings } from '../contract.ts'
+import { DEFAULT_PASSWORD_REF, type ConnectionProfile, type DatabaseSettings, type DialectCatalog, type DialectDescriptor } from '../contract.ts'
 
 /** One editable field of the connection dialog, in form order. */
 export type DbFormField
@@ -35,7 +35,7 @@ export type DbProbe =
 
 /** One saved connection as a card renders it. */
 export interface ConnectionCard {
-  profile: MysqlSettings
+  profile: ConnectionProfile
   /** Whether the tools currently address this connection. */
   active: boolean
   /** Whether the Host reports a stored value for this profile's reference. */
@@ -90,7 +90,7 @@ export interface DatabasePageState {
 }
 
 /** The credential-domain face the page writes and describes through. */
-export interface MysqlCredentialsFace {
+export interface DbCredentialsFace {
   describe: (ref: string) => Promise<{ configured: boolean; writable: boolean }>
   set: (ref: string, value: string) => Promise<void>
 }
@@ -120,21 +120,6 @@ export interface DbPageFace extends DbFormActions {
     dbPage: SnapshotStore<DatabasePageState>
   }
 }
-
-/** One offering of the type chooser. */
-export interface DialectOffering {
-  /** Registry key the connection is saved under. */
-  dialect: string
-  /** Whether the plugin can actually open a session for it. */
-  available: boolean
-}
-
-/** The type chooser's offerings; only the bundled dialect is selectable today. */
-export const DIALECT_OFFERINGS: readonly DialectOffering[] = [
-  { dialect: 'mysql', available: true },
-  { dialect: 'postgres', available: false },
-  { dialect: 'oracle', available: false },
-]
 
 /** Whether a draft text is a positive whole number. */
 function positiveInteger(text: string): number | undefined {
@@ -186,7 +171,7 @@ export function fieldInvalid(field: DbFormField, text: string): boolean {
 }
 
 /** The saved profile the dialog's draft parses to, or undefined while invalid. */
-export function dialogProfile(dialog: DbDialog): MysqlSettings | undefined {
+export function dialogProfile(dialog: DbDialog): ConnectionProfile | undefined {
   if (dialog.kind !== 'form' || !dialogValid(dialog)) return undefined
   return {
     id: dialog.id,
@@ -205,7 +190,7 @@ export function dialogProfile(dialog: DbDialog): MysqlSettings | undefined {
 }
 
 /** Draft text for one field, rendered from a saved profile. */
-function fieldText(profile: MysqlSettings, field: DbFormField): string {
+function fieldText(profile: ConnectionProfile, field: DbFormField): string {
   switch (field) {
     case 'name': return profile.name
     case 'host': return profile.host
@@ -225,15 +210,25 @@ function freshId(): string {
   return uuid ?? `conn-${String(Date.now())}`
 }
 
-/** The empty draft text per field, for a new MySQL connection. */
-function blankFields(): Record<DbFormField, string> {
+/**
+ * Draft text for a new connection, seeded from what its dialect declares.
+ *
+ * A port and an account are facts about one server, so the page takes them from
+ * the dialect's own defaults; a dialect that names none leaves the box empty,
+ * and an empty box blocks the save rather than letting the plugin guess.
+ * @param descriptor - the chosen type, as the Host described it.
+ * @param dialect - the type's registry key, used when it names no label.
+ * @returns the draft text per shared field.
+ */
+function blankFields(descriptor: DialectDescriptor | undefined, dialect: string): Record<DbFormField, string> {
+  const defaults = descriptor?.connectionDefaults ?? {}
   return {
-    name: 'MySQL',
-    host: '127.0.0.1',
-    port: '3306',
-    user: 'root',
-    database: '',
-    passwordEnv: 'DSH_MYSQL_PASSWORD',
+    name: descriptor?.label ?? dialect,
+    host: defaults.host ?? '127.0.0.1',
+    port: defaults.port === undefined ? '' : String(defaults.port),
+    user: defaults.user ?? '',
+    database: defaults.database ?? '',
+    passwordEnv: defaults.passwordEnv ?? DEFAULT_PASSWORD_REF,
     connectTimeoutMs: '10000',
     queryTimeoutMs: '30000',
     maxRows: '200',
@@ -247,7 +242,7 @@ function blankFields(): Record<DbFormField, string> {
  * without it the dialect's fields are carried over but not described.
  * @returns the dialog editing that profile.
  */
-export function editDraftFor(profile: MysqlSettings, catalog?: DialectCatalog): DbDialog {
+export function editDraftFor(profile: ConnectionProfile, catalog?: DialectCatalog): DbDialog {
   const fields = {} as Record<DbFormField, string>
   for (const field of DB_FORM_FIELDS) fields[field] = fieldText(profile, field)
   const configFields = catalog?.installed.find(entry => entry.name === profile.dialect)?.configFields ?? []
@@ -280,8 +275,8 @@ export class DatabaseSettingsController {
 
   constructor(
     private readonly scope: SettingsScope<DatabaseSettings>,
-    private readonly credentialFace: MysqlCredentialsFace,
-    private readonly probe: (request: { id?: string, profile?: MysqlSettings }) => Promise<DbProbe>,
+    private readonly credentialFace: DbCredentialsFace,
+    private readonly probe: (request: { id?: string, profile?: ConnectionProfile }) => Promise<DbProbe>,
     private readonly loadCatalog: () => Promise<DialectCatalog>,
   ) {
     this.store = createSnapshotStore(this.projection())
@@ -325,7 +320,7 @@ export class DatabaseSettingsController {
         for (const field of configFields) extra[field.key] = field.default
         this.dialog = {
           kind: 'form', mode: 'new', id: freshId(), dialect,
-          configFields, fields: blankFields(), extra, password: '', probe: { status: 'idle' },
+          configFields, fields: blankFields(descriptor, dialect), extra, password: '', probe: { status: 'idle' },
         }
         this.publish()
       },

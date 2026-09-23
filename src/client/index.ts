@@ -16,21 +16,24 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 // Type-only: pulls the ctx.remote merge (the generated remote namespaces).
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import type { DbPageFace, DbProbe } from './form.ts'
-import { DatabaseSettingsController, type MysqlCredentialsFace } from './form.ts'
+import { DatabaseSettingsController, type DbCredentialsFace } from './form.ts'
 import { DatabaseSettingsPage } from './DatabaseSettingsPage.tsx'
-import { MYSQL_DIALECTS_PATH, MYSQL_SETTINGS_NAMESPACE, MYSQL_TEST_PATH, type DatabaseSettings, type DialectCatalog, type MysqlSettings, type ProbeRequest } from '../contract.ts'
+import {
+  DB_DIALECTS_PATH, DB_SETTINGS_NAMESPACE, DB_TEST_PATH,
+  type ConnectionProfile, type DatabaseSettings, type DialectCatalog, type ProbeRequest,
+} from '../contract.ts'
 
-import { en, zh, type MysqlLocaleKey } from './locales.ts'
+import { en, zh, type DbLocaleKey } from './locales.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
-    /** Copy of the MySQL settings page. */
-    'settings.mysql': MysqlLocaleKey
+    /** Copy of the database settings page. */
+    'settings.db': DbLocaleKey
   }
 }
 
 /** Dictionary namespace owned by this plugin. */
-const NS = 'settings.mysql'
+const NS = 'settings.db'
 
 /** Required services (cordis fiber inject). */
 export const inject = [
@@ -38,14 +41,14 @@ export const inject = [
 ]
 
 /**
- * Register the MySQL settings page.
+ * Register the database settings page.
  * @param ctx - browser plugin context.
  */
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-ds-db: copy dictionaries')
 
-  const scope = ctx.settingsScope.bind<DatabaseSettings>({ namespace: MYSQL_SETTINGS_NAMESPACE })
-  const credentials: MysqlCredentialsFace = {
+  const scope = ctx.settingsScope.bind<DatabaseSettings>({ namespace: DB_SETTINGS_NAMESPACE })
+  const credentials: DbCredentialsFace = {
     // A refused describe is reported as "nothing stored, still writable": the
     // control stays usable and the Host is what refuses, rather than the page
     // guessing a refusal it did not receive.
@@ -62,7 +65,7 @@ export function apply(ctx: ClientContext): void {
 
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
-    id: MYSQL_SETTINGS_NAMESPACE,
+    id: DB_SETTINGS_NAMESPACE,
     // After the shipped sections (General 0, Models 10, Plugins 15), so a
     // deployment's own page never pushes the built-in ones around.
     order: 40,
@@ -80,7 +83,7 @@ export function apply(ctx: ClientContext): void {
  */
 async function loadCatalog(): Promise<DialectCatalog> {
   try {
-    const response = await fetch(MYSQL_DIALECTS_PATH, { method: 'GET' })
+    const response = await fetch(DB_DIALECTS_PATH, { method: 'GET' })
     if (!response.ok) return { installed: [], known: [] }
     const payload = await response.json() as DialectCatalog
     return {
@@ -99,11 +102,11 @@ async function loadCatalog(): Promise<DialectCatalog> {
  * @returns the probe outcome; a transport failure is a failed probe, not a throw.
  */
 async function probeConnection(request: ProbeRequest): Promise<DbProbe> {
-  const body: { id?: string, profile?: MysqlSettings } = {}
+  const body: { id?: string, profile?: ConnectionProfile } = {}
   if (request.id !== undefined) body.id = request.id
   if (request.profile !== undefined) body.profile = request.profile
   try {
-    const response = await fetch(MYSQL_TEST_PATH, {
+    const response = await fetch(DB_TEST_PATH, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),

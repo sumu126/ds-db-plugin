@@ -181,11 +181,22 @@ function createPool(connection: DatabaseConnection): Pool {
 export const MYSQL_DIALECT: DatabaseDialect = {
   name: 'mysql',
   label: 'MySQL',
+  // The type describes itself: the plugin cannot write this line, because the
+  // driver and the metadata surface are facts about MySQL.
+  description: '通过 mysql2 驱动连接，提供库、表、结构与只读查询。',
   rules: MYSQL_RULES,
   capabilities: new Set<DialectCapability>(DIALECT_CAPABILITIES),
   // MySQL needs no field beyond the shared ones; a server that does declares
   // its own here and reads it back from `connection.extra`.
   configFields: [],
+  // MySQL's own values for the shared fields: a port and an account name are
+  // facts about this server, so the plugin declares neither.
+  connectionDefaults: {
+    host: '127.0.0.1',
+    port: 3306,
+    user: 'root',
+    passwordEnv: 'DSH_MYSQL_PASSWORD',
+  },
   rowBoundHint: 'LIMIT',
   systemDatabases: MYSQL_SYSTEM_DATABASES,
 

@@ -205,6 +205,8 @@ export function apply(ctx: Context): void {
 | 成员 | 你要提供什么 |
 | --- | --- |
 | `name` / `label` | 注册表键与模型可见的自称 |
+| `description` | 一句自述（页面类型卡片显示它——插件不会替你写） |
+| `connectionDefaults` | 你的库的端口与账号（如 `{ port: 5432, user: 'postgres' }`）：页面用它预填新连接 |
 | `rules` | **只读红线**：词法（引号字符、注释标记、是否允许反斜杠转义）+ 放行的语句族 + 禁止项（看着只读实则会写或加锁的写法） |
 | `open(connection)` | 用你的驱动开一个会话，实现 `run(statement)` 与 `close()` |
 | `applyRowLimit(sql, n)` | 保证「忘记写上限也不会把整表灌进模型上下文」 |

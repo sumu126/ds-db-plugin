@@ -25,6 +25,7 @@
 ### 设计（`01_Design/`）
 - [`01_Design/001_方言扩展能力_设计方案.md`](./01_Design/001_方言扩展能力_设计方案.md) — 核心：三条 seam 的补全方案、兼容性策略、风险
 - [`01_Design/002_插件自身的插件化_设计方案.md`](./01_Design/002_插件自身的插件化_设计方案.md) — 核心不再内置方言，`dialects/` 工作区与工具注册的等待机制
+- [`01_Design/003_默认值的归属_设计方案.md`](./01_Design/003_默认值的归属_设计方案.md) — 端口/账号/自述归方言（`connectionDefaults`、`description`），命名残留清理
 
 ### 契约（`04_API_Docs/`）
 - [`04_API_Docs/方言扩展_API.md`](./04_API_Docs/方言扩展_API.md) — 方言作者视角的 `DatabaseDialect` 接口、注册方式、自检清单

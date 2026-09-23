@@ -1,5 +1,5 @@
 /**
- * Database types a deployment may install, and the one it addresses by default.
+ * Database types a deployment may install.
  *
  * A type appears in `KNOWN_DIALECT_PACKAGES` when a package could register it
  * but none is registered in this deployment. It is how the settings page says
@@ -7,15 +7,13 @@
  * affects resolution — only a registered dialect does.
  *
  * Every entry, including MySQL, is an ordinary dialect package: the core plugin
- * ships no dialect of its own.
+ * ships no dialect of its own and names no default database type, so this list
+ * is a hint for the page, not a statement of what the plugin can reach.
  *
  * @module dsh-ds-db/src/dialect-catalog
  */
 
 import type { KnownDialectPackage } from './contract.ts'
-
-/** Dialect a connection names when the composition configures none. */
-export const DEFAULT_DIALECT_NAME = 'mysql'
 
 /** Known dialect packages a deployment may install. */
 export const KNOWN_DIALECT_PACKAGES: readonly KnownDialectPackage[] = [

@@ -199,6 +199,13 @@ assert.deepEqual(catalog.installed.find(entry => entry.name === 'postgres').conf
 // `postgres` is registered above, so it is no longer offered as installable:
 // the known list is what this deployment is missing, not a static catalog.
 assert.deepEqual(catalog.known.map(entry => entry.name), ['oracle'])
+
+// The port and the account are the dialect's own declarations: the plugin
+// names no database type, so it cannot carry a default for either.
+const mysqlEntry = catalog.installed.find(entry => entry.name === 'mysql')
+assert.equal(mysqlEntry.connectionDefaults.port, 3306, 'the dialect names its own port')
+assert.equal(mysqlEntry.connectionDefaults.user, 'root', 'the dialect names its own account')
+assert.equal(typeof mysqlEntry.description, 'string', 'the dialect describes itself')
 console.log(`dialect catalog: installed ${catalog.installed.map(entry => entry.name).join(', ')}`)
 
 // Registration is an effect: disposing it takes the dialect away again.

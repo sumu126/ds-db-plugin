@@ -14,17 +14,17 @@ import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-cli
 import type { ConnectionCard, DbDialog, DbFormField, DbPageFace, DbProbe } from './form.ts'
 import { FIELD_INVALID_KEY, dialogValid, editDraftFor, fieldInvalid } from './form.ts'
 import type { DialectCatalog } from '../contract.ts'
-import type { MysqlLocaleKey } from './locales.ts'
+import type { DbLocaleKey } from './locales.ts'
 import styles from './page.css'
 
 /** Props the renderer binds for this settings section. */
 export type DatabaseSettingsPageProps =
   PropsRuntime<'settings.section'>
-  & PropsLocale<'settings.mysql'>
+  & PropsLocale<'settings.db'>
   & InjectFace<DbPageFace>
 
 /** The copy key each dialog field is labelled with. */
-const FIELD_LABEL_KEY: Record<DbFormField, MysqlLocaleKey> = {
+const FIELD_LABEL_KEY: Record<DbFormField, DbLocaleKey> = {
   name: 'name',
   host: 'host',
   port: 'port',
@@ -37,7 +37,7 @@ const FIELD_LABEL_KEY: Record<DbFormField, MysqlLocaleKey> = {
 }
 
 /** The copy key each dialog field's hint is read with. */
-const FIELD_HINT_KEY: Record<DbFormField, MysqlLocaleKey> = {
+const FIELD_HINT_KEY: Record<DbFormField, DbLocaleKey> = {
   name: 'nameHint',
   host: 'hostHint',
   port: 'portHint',
@@ -59,7 +59,7 @@ const CONNECTION_FIELDS: readonly DbFormField[] = ['name', 'host', 'port', 'user
 const LIMIT_FIELDS: readonly DbFormField[] = ['connectTimeoutMs', 'queryTimeoutMs', 'maxRows']
 
 /** One probe outcome line, narrowed at render. */
-function ProbeLine(props: { probe: DbProbe, t: (key: MysqlLocaleKey, params?: Record<string, string>) => string }) {
+function ProbeLine(props: { probe: DbProbe, t: (key: DbLocaleKey, params?: Record<string, string>) => string }) {
   const { probe } = props
   if (probe.status === 'ok') {
     return (
@@ -78,7 +78,7 @@ function ProbeLine(props: { probe: DbProbe, t: (key: MysqlLocaleKey, params?: Re
 function Card(props: {
   card: ConnectionCard
   writable: boolean
-  t: (key: MysqlLocaleKey, params?: Record<string, string>) => string
+  t: (key: DbLocaleKey, params?: Record<string, string>) => string
   onActivate: () => void
   onTest: () => void
   onEdit: () => void
@@ -124,7 +124,7 @@ function Card(props: {
 function DialogField(props: {
   field: DbFormField
   dialog: Extract<DbDialog, { kind: 'form' }>
-  t: (key: MysqlLocaleKey) => string
+  t: (key: DbLocaleKey) => string
   disabled: boolean
   onEdit: (field: DbFormField, text: string) => void
 }) {
@@ -157,7 +157,7 @@ function DialogField(props: {
  */
 function TypeChooser(props: {
   catalog: DialectCatalog | undefined
-  t: (key: MysqlLocaleKey, params?: Record<string, string>) => string
+  t: (key: DbLocaleKey, params?: Record<string, string>) => string
   onChoose: (dialect: string) => void
 }) {
   const { catalog, t } = props
@@ -175,9 +175,12 @@ function TypeChooser(props: {
           onClick={() => { props.onChoose(entry.name) }}
         >
           <span className={styles.typeName}>{entry.label}</span>
-          <p className={styles.typeDesc}>
-            {entry.configFields.length === 0 ? t('dialectMysqlDesc') : t('extraFields', { count: String(entry.configFields.length) })}
-          </p>
+          {/* The type's own line, not the plugin's: only the dialect knows what
+              it connects through and what it offers. */}
+          <p className={styles.typeDesc}>{entry.description ?? entry.label}</p>
+          {entry.configFields.length > 0
+            ? <p className={styles.typeDesc}>{t('extraFields', { count: String(entry.configFields.length) })}</p>
+            : null}
         </button>
       ))}
       {catalog.known.map(entry => (
@@ -197,7 +200,7 @@ function TypeChooser(props: {
 function FormDialog(props: {
   dialog: Extract<DbDialog, { kind: 'form' }>
   saving: boolean
-  t: (key: MysqlLocaleKey, params?: Record<string, string>) => string
+  t: (key: DbLocaleKey, params?: Record<string, string>) => string
   onEditField: (field: DbFormField, text: string) => void
   onEditExtra: (key: string, text: string) => void
   onEditPassword: (text: string) => void

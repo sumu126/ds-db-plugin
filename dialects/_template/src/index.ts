@@ -81,6 +81,7 @@ class Session implements DialectSession {
 export const TEMPLATE_DIALECT: DatabaseDialect = {
   name: 'template',   // TODO: the registry key, such as `clickhouse`
   label: 'Template',  // TODO: what the model and the settings page call it
+  description: 'TODO: one line about what this type connects through and offers.',
   rules: RULES,
 
   // TODO: declare only what your server really provides. A missing ability is a
@@ -90,6 +91,12 @@ export const TEMPLATE_DIALECT: DatabaseDialect = {
   // TODO: fields only your server needs; the page renders them and the values
   // arrive in `connection.extra`.
   configFields: [],
+
+  // TODO: your server's own values for the shared fields, such as
+  // `{ port: 5432, user: 'postgres' }`. The page pre-fills a new connection
+  // with them, and a saved connection that leaves one empty falls back to them;
+  // a field named neither here nor on the connection is refused with its name.
+  connectionDefaults: {},
 
   rowBoundHint: 'LIMIT',      // TODO: how a model should bound rows, such as FETCH FIRST
   systemDatabases: [],        // TODO: schemas your server owns, hidden by db_databases
