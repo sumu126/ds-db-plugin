@@ -51,14 +51,14 @@ function FallbackRow({ toolName, block }: { toolName: string, block: ToolCallBlo
  * what {@link TableCard.truncated} is about, and the two are shown together so a
  * reader never takes the drawn rows for the whole result.
  */
-function TableView({ card, toolName, t }: { card: TableCard, toolName: string, t: Translate }) {
-  const scope = card.database === undefined && card.table === undefined
-    ? toolName
-    : [card.database, card.table].filter(part => part !== undefined).join('.')
+function TableView({ card, t }: { card: TableCard, t: Translate }) {
+  // A card with no name of its own shows copy rather than the wire tool name: the
+  // header is read by a person, and `db_query` answers nothing they asked.
+  const title = card.title.scope ?? t(card.title.key)
   return (
     <div className={styles.row}>
       <div className={styles.head}>
-        <span className={styles.title}>{scope}</span>
+        <span className={styles.title}>{title}</span>
         <span className={styles.count}>{t('rows', { count: String(card.rowCount) })}</span>
         {card.truncated ? <span className={styles.badge}>{t('cut')}</span> : null}
         {card.elapsedMs === undefined ? null : <span className={styles.count}>{`${String(card.elapsedMs)} ms`}</span>}
@@ -105,7 +105,7 @@ function ListView({ card, t }: { card: ListCard, t: Translate }) {
   return (
     <div className={styles.row}>
       <div className={styles.head}>
-        <span className={styles.title}>{t(card.label)}</span>
+        <span className={styles.title}>{card.title.scope ?? t(card.title.key)}</span>
         <span className={styles.count}>{t('rows', { count: String(card.total) })}</span>
         {card.truncated ? <span className={styles.badge}>{t('cut')}</span> : null}
         {card.database === undefined ? null : <span className={styles.count}>{card.database}</span>}
@@ -132,7 +132,7 @@ function ListView({ card, t }: { card: ListCard, t: Translate }) {
 export function TableRow({ toolName, block, t }: DbRowProps) {
   const card = dbCardModel(block)
   if (card === null || card.kind !== 'table') return <FallbackRow toolName={toolName} block={block} />
-  return <TableView card={card} toolName={toolName} t={t} />
+  return <TableView card={card} t={t} />
 }
 
 /** The row for one `db_tables` or `db_databases` call. */

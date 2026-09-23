@@ -105,6 +105,29 @@ assert.equal(databasesCard.total, 2)
 assert.equal(databasesCard.label, 'databases')
 console.log('round trip: db_databases listing read back')
 
+// A header never shows a wire tool name: a card that knows what it read says the
+// name, and one that does not falls back to copy a dictionary carries.
+const sampleCard = dbCardModel(settledCall(metaOf('db_sample', { table: 'events' }, {
+  database: 'app', table: 'events', columns: ['id'], rows: [[1]],
+})))
+const tablesCard = dbCardModel(settledCall(metaOf('db_tables', { database: 'app' }, {
+  database: 'app', tables: [{ name: 'events', type: 'BASE TABLE', engine: 'InnoDB', estimatedRows: 3, comment: '' }],
+})))
+assert.equal(queryCard.title.scope, undefined, 'a bare query has no name of its own')
+assert.equal(queryCard.title.key, 'result', 'so it falls back to the copy for a query result')
+assert.equal(sampleCard.title.scope, 'app.events', 'a sample says what it read')
+assert.equal(databasesCard.title.key, 'databases', 'a listing says what it lists')
+assert.equal(tablesCard.title.key, 'tables')
+assert.equal(tablesCard.title.scope, undefined)
+for (const card of [queryCard, sampleCard, databasesCard, tablesCard]) {
+  assert.equal(
+    (card.title.scope ?? card.title.key).startsWith('db_'),
+    false,
+    'no header is a wire tool name',
+  )
+}
+console.log('headers: named when named, copy otherwise, never a wire tool name')
+
 // Every way metadata can fail to describe a card: the generic row, never a
 // half-drawn one. These are the payloads a replayed session can really carry.
 const table = { card: 'table', columns: ['id'], rows: [[1]], rowCount: 1, truncated: false }

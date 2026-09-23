@@ -14,10 +14,26 @@ import type { ToolCallBlock } from '@deepseek-ai/dsh-client-ui-chat/client'
 /** One cell a card draws: the Host flattens a row to scalars before persisting it. */
 export type CardCell = string | number | boolean | null
 
+/**
+ * What a card's header shows.
+ *
+ * A card that knows what it read says `database.table` — a name no dictionary can
+ * translate. One that does not falls back to copy, so a header never shows a raw
+ * wire tool name to the person reading the turn.
+ */
+export interface CardTitle {
+  /** The name the card is about, when it has one; the header prefers it. */
+  scope: string | undefined
+  /** Dictionary key of the copy used when {@link scope} is absent. */
+  key: 'result' | 'tables' | 'databases'
+}
+
 /** A result table, as `db_query` and `db_sample` persist one. */
 export interface TableCard {
   /** Which shape this is. */
   kind: 'table'
+  /** What the header shows. */
+  title: CardTitle
   /** Database the rows came from, when the tool named one. */
   database?: string
   /** Table the rows came from, when the tool named one. */
@@ -38,6 +54,8 @@ export interface TableCard {
 export interface ListCard {
   /** Which shape this is. */
   kind: 'list'
+  /** What the header shows: the copy naming the kind of thing listed. */
+  title: CardTitle
   /** What the items are. */
   label: 'databases' | 'tables'
   /** Database the items came from, when the tool named one. */
@@ -114,8 +132,12 @@ function tableCard(meta: Record<string, unknown>, truncated: boolean): TableCard
   const database = textOf(meta.database)
   const table = textOf(meta.table)
   const elapsedMs = countOf(meta.elapsedMs)
+  // Named when the tool named it, so a sample's header reads `app.events` instead
+  // of the same copy a bare query gets.
+  const named = [database, table].filter((part): part is string => part !== undefined && part.length > 0)
   return {
     kind: 'table',
+    title: { scope: named.length === 0 ? undefined : named.join('.'), key: 'result' },
     columns,
     rows,
     rowCount,
@@ -143,6 +165,7 @@ function listCard(meta: Record<string, unknown>, truncated: boolean): ListCard |
   const database = textOf(meta.database)
   return {
     kind: 'list',
+    title: { scope: undefined, key: meta.label },
     label: meta.label,
     items,
     total,
