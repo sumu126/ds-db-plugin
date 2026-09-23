@@ -387,6 +387,20 @@ pnpm install --frozen-lockfile                                             # 一
 
 - **打包后先 `tar -tzf` 看清单，再看 npm 页面。** `README` 是唯一 `files` 白名单管不住的东西（npm 总是包含它），所以"加了白名单就干净了"是错的。
 - **`pack` 必须排在所有会进包的改动之后。** 「`tag` 在最后」只防 tag 与产物漂移，不防"pack 之后又改了包内文件"——曾经出现过 pack 在 19:00、19:08 又提交了 README 的情况，那份快照里装的就是旧清单。
+- **再查一次时间轴：包里那份 `lib/` 是不是当前源码构建的。** 内容对了，产物仍可能是旧**行为**。分两层，都要看，而且都只看时间戳、没有文本管线的风险：
+
+  ```sh
+  git status --porcelain                                          # 必须为空
+  git log -1 --format='%ad' --date=format:'%m-%d %H:%M' -- src dialects/mysql/src
+  ls -l --time-style=+%m-%d\ %H:%M lib/*.js dialects/mysql/lib/*.js *.tgz
+  ```
+
+  1. **`lib/` 的 mtime ≥ `src/` 的 mtime** —— 产物是基于当前源码构建的。这是 `prepack` 在起作用（两个包都声明了它）；若 `lib/` 比 `src/` 旧，说明有人绕过了 `prepack` 手工打包。
+  2. **工作区干净 + `src` 的最后提交 ≤ `tgz` 的 mtime** —— 产物包含了最新提交。`git log` 给的是最后一次**提交**时间，工作区若有未提交的 src 改动，它代表不了源码的实际状态，判据会假阴性。
+
+  一条经验读数：**`lib/` 的 mtime 应当与 `tgz` 同分钟**（`prepack` 在打包时重建）。不同分钟不等于内容不同，但它意味着那次打包**没有走 `prepack`**——方言包正是因为缺 `prepack` 才被这一条抓出来的。
+
+  文档漂移只让人看到旧清单，**源码与产物时间倒挂会把旧行为直接发出去**。
 
 第一条不是形式主义：这个仓库的 `pnpm-lock.yaml` **曾经在主分支上腐烂了十几个提交**——它的根 importer 还停在"依赖只有 mysql2"的形态，`dialects/mysql` 这个 workspace 成员从未出现在里面。原因是本仓的 pnpm 路径长期没被走通（一直在用 `npm install --legacy-peer-deps` 绕），于是同时掩盖了两件事：pnpm 会自动安装缺失的 peer（而本插件的 peer 全是宿主提供、未发布的包），以及 lockfile 早已过期。两笔账在依赖改用只有 pnpm 认的 `workspace:` 那一刻同时到期。所以：**lockfile 要么被 gate，要么删掉——一个说谎的 lockfile 比没有更糟**。这里选 gate，就是这第一条。
 
