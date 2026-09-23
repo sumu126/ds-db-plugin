@@ -1,7 +1,6 @@
 {
   "name": "dsh-ds-db",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "description": "Read-only database access for DSH: a connection settings page plus tools for listing connections, databases, tables, structure, sampling, plans, and queries — addressed through pluggable SQL dialects, with MySQL shipped as the bundled dialect package.",
   "license": "MIT",
@@ -34,6 +33,7 @@
   "scripts": {
     "build": "node scripts/build-host.mjs && node scripts/build-client.mjs && node scripts/build-dialects.mjs",
     "prepare": "npm run build",
+    "prepack": "npm run build",
     "typecheck": "tsc -p tsconfig.types.json && tsc -p dialects/mysql/tsconfig.types.json",
     "test": "node --import tsx/esm --test dialects/mysql/tests/sql-guard.test.ts dialects/mysql/tests/dialect.test.ts dialects/mysql/tests/contract-audit.test.ts",
     "test:dialects": "npm --prefix dialects/mysql test",
@@ -47,7 +47,7 @@
   },
   "dependencies": {
     "clsx": "^2.1.1",
-    "dsh-dialect-mysql": "file:dialects/mysql"
+    "dsh-dialect-mysql": "workspace:^"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "*",

@@ -84,10 +84,13 @@
 
 ```sh
 cd ds-db-plugin
-pnpm install --no-frozen-lockfile      # 首选；宿主包是可选 peer，lockfile 需随声明更新
-# 若包管理器仍去解析未发布的宿主包：npm install --legacy-peer-deps
+pnpm install --no-frozen-lockfile      # 必须 pnpm：方言依赖用 workspace: 声明，npm 不认
 npm run build                          # 产出 lib/index.js（host）与 lib/client.js（浏览器半边）
 ```
+
+> **必须用 pnpm。** `dsh-dialect-mysql` 以 `workspace:^` 声明——本地是同仓链接，发布时由 pnpm 改写成版本号，一份声明两用；npm 会直接以 `EUNSUPPORTEDPROTOCOL "workspace:"` 拒绝。
+>
+> 仓库根还有一条相关配置：`pnpm-workspace.yaml` 里的 `autoInstallPeers: false`。本插件声明的 `@deepseek-ai/*` 全是**宿主运行时提供**的 optional peer，它们没有发布到 npm，包管理器去装只会失败——这条配置就是把这个默认行为关掉。
 
 `lib/client.js` 是必需产物：`dsh` 的客户端模块扫描读取包的 `exports["./client"]`，改了 `src/client` 必须重新构建。
 
@@ -275,7 +278,8 @@ cd <你的方言目录> && git init && npm run verify && npm publish
 
 | 现象 | 原因 |
 | --- | --- |
-| 装不上，报找不到 `dsh-ds-db` | 它还没发布到 npm，安装时加 `--legacy-peer-deps` |
+| `npm install` 报 `EUNSUPPORTEDPROTOCOL "workspace:"` | 依赖用 `workspace:` 声明，只能用 pnpm 装（发布产物里已被改写成版本号） |
+| `pnpm install` 一直重试解析 `@deepseek-ai/dsh-*` | 那些是宿主提供的 optional peer，仓库已用 `autoInstallPeers: false` 关掉自动安装；仍出现说明你不在本仓库根目录 |
 | 调用报「dialect X is not registered」 | 你的包没被加载；用 `dsh --dump-config` 确认那一层在 |
 | 工具描述里还是旧的自称 | 已知行为：描述注册时写定，重载后更新；**调用不受影响** |
 | 设置页没出现我的类型 | 页面从 `GET /api/ds-db/dialects` 读注册表；确认你的方言注册成功 |
@@ -285,7 +289,7 @@ cd <你的方言目录> && git init && npm run verify && npm publish
 ## 给插件开发者：本地开发
 
 ```sh
-pnpm install --no-frozen-lockfile   # 或 npm install --legacy-peer-deps
+pnpm install --no-frozen-lockfile   # 必须 pnpm，见上
 npm run typecheck         # 核心 + 各方言包（harness 依赖按其 .d.ts 解析）
 npm test                  # 方言包的行为测试与契约审计（24 例）
 npm run verify:host       # 挂真实 ToolRuntime：方言以独立插件挂载后跑通全部断言

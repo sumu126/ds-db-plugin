@@ -12,3 +12,9 @@ packages:
 # to run an unlisted build script, and the client and dialect bundles need it.
 allowBuilds:
   esbuild: true
+
+# pnpm installs missing peers by default, and every peer this plugin declares is
+# a harness package the *running host* provides and npm does not have. Automatic
+# installation therefore fails on `@deepseek-ai/dsh-*` before it can do anything
+# useful — which is also why the README's install step is pnpm and not npm.
+autoInstallPeers: false

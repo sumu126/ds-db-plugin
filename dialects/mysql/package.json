@@ -22,7 +22,7 @@
   "devDependencies": {
     "@deepseek-ai/cordis": "*",
     "@types/node": "^22.20.0",
-    "dsh-ds-db": "file:../..",
+    "dsh-ds-db": "workspace:^",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3"
   }
