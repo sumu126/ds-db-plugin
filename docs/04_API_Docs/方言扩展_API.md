@@ -142,7 +142,7 @@ export interface DialectConfigField {
   kind: 'text' | 'number' | 'secret-ref'
   default: string | number
   required: boolean
-  hintKey?: string
+  hint?: string
   sensitive?: boolean
 }
 ```
@@ -153,7 +153,7 @@ export interface DialectConfigField {
 configFields: [{ key: 'serviceName', kind: 'text', default: 'ORCL', required: true }]
 ```
 
-**文案**：方言作者无法往本插件字典加键，请在方言内自带 `{ zh, en }` 文案并在 `hintKey` 缺失时提供回退标签，避免页面出现硬编码英文。
+**文案**：`label` 与 `hint` 都是**方言自带的文本**，页面直接显示——插件字典不可能为每种方言的每个字段备一句话。省略 `hint` 时页面回退到通用提示（必填 / 可留空）。
 
 ## 5. 已知行为（不是 bug）
 

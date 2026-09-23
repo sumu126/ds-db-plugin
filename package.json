@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Read-only database access for DSH: a connection settings page plus database, table, describe, and query tools, addressed through a pluggable SQL dialect (MySQL bundled).",
+  "description": "Read-only database access for DSH: a connection settings page plus tools for listing connections, databases, tables, structure, sampling, plans, and queries — addressed through pluggable SQL dialects, with MySQL shipped as the bundled dialect package.",
   "license": "MIT",
   "repository": {
     "type": "git",

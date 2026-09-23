@@ -95,7 +95,7 @@ assert.equal(
 )
 console.log('dialect-derived parameter text: unchanged')
 
-// The plugin provides the registry and registers its own dialect into it.
+// The plugin provides the registry; the dialect package mounted above fills it.
 assert.deepEqual(ctx.databaseDialects.names(), ['mysql'])
 assert.equal(ctx.databaseDialects.get('mysql'), MYSQL_DIALECT)
 console.log(`dialect registry: ${ctx.databaseDialects.names().join(', ')}`)
@@ -121,7 +121,7 @@ console.log(`connection refusal: ${reach.message}`)
 // A dialect name nothing registers is reported by the call that needs it, with
 // what is registered, rather than by a load that cannot know about later layers.
 const second = await mount({ ...UNREACHABLE, dialect: 'postgres' })
-assert.deepEqual(second.databaseDialects.names(), ['mysql'], 'the plugin still registers its own dialect')
+assert.deepEqual(second.databaseDialects.names(), ['mysql'], 'the mounted dialect package is still registered')
 const unresolved = await second.tools.get('db_tables').execute({ database: 'app' }, undefined)
   .then(() => undefined, error => error)
 assert.ok(unresolved instanceof Error, 'an unregistered dialect fails the call')

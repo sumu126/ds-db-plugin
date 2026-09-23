@@ -199,9 +199,15 @@ export interface DialectConfigField {
   readonly default: string | number
   /** Whether an empty value blocks the tool call that needs it. */
   readonly required: boolean
-  /** Dictionary key of this field's hint; falls back to {@link label}. */
-  readonly hintKey?: string
-  /** Label the page shows, and the fallback when no dictionary holds `hintKey`. */
+  /**
+   * One line the page shows under the control.
+   *
+   * The text is the dialect's, not the plugin's: what a field means is a fact
+   * about the server that declared it, and the plugin's dictionary cannot hold
+   * a sentence for every dialect's fields.
+   */
+  readonly hint?: string
+  /** Label the page shows; the field's key is the fallback when it names none. */
   readonly label?: string
   /** Whether the control is write-only, for values that are secrets. */
   readonly sensitive?: boolean
@@ -311,20 +317,20 @@ export interface DatabaseDialect {
 }
 
 /**
- * The dialects one deployment can address.
- *
- * The plugin provides this registry and registers its own dialect into it; a
- * further dialect ships as its own package, which injects `databaseDialects`
- * and registers itself. Registration is an effect: {@link register} returns the
- * disposer that removes the dialect again.
- */
-/**
  * Waiting key for "any dialect": a connection that names no database type
  * addresses whichever dialect registers first, so it waits for one rather than
  * for a name.
  */
 const ANY_DIALECT = ''
 
+/**
+ * The dialects one deployment can address.
+ *
+ * The plugin provides this registry and ships no dialect of its own: every
+ * database type, MySQL included, arrives as a package that injects
+ * `databaseDialects` and registers itself. Registration is an effect:
+ * {@link register} returns the disposer that removes the dialect again.
+ */
 export class DatabaseDialectRegistry extends Service {
   private readonly dialects = new Map<string, DatabaseDialect>()
   private readonly waiting = new Map<string, Set<() => void>>()

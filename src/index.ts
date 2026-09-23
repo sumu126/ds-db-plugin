@@ -198,12 +198,14 @@ export function dialectCatalog(registry: DatabaseDialectRegistry): DialectCatalo
         ...dialect.description === undefined ? {} : { description: dialect.description },
         capabilities: [...dialect.capabilities],
         connectionDefaults: dialect.connectionDefaults ?? {},
+        systemDatabases: [...dialect.systemDatabases],
         configFields: dialect.configFields.map(field => ({
           key: field.key,
           kind: field.kind,
           default: field.default,
           required: field.required,
           ...field.label === undefined ? {} : { label: field.label },
+          ...field.hint === undefined ? {} : { hint: field.hint },
           ...field.sensitive === true ? { sensitive: true } : {},
         })),
       }

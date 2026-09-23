@@ -6,7 +6,7 @@
   "main": "lib/index.js",
   "license": "MIT",
   "scripts": {
-    "build": "node ../../scripts/build-dialect.mjs",
+    "build": "node ../../scripts/build-dialects.mjs .",
     "test": "node --import tsx/esm --test tests/sql-guard.test.ts tests/dialect.test.ts tests/contract-audit.test.ts",
     "verify": "node --import tsx/esm scripts/verify.ts"
   },

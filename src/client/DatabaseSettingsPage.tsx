@@ -183,6 +183,13 @@ function TypeChooser(props: {
           {entry.configFields.length > 0
             ? <p className={styles.typeDesc}>{t('extraFields', { count: String(entry.configFields.length) })}</p>
             : null}
+          {entry.systemDatabases.length > 0
+            ? (
+                <p className={styles.typeDesc}>
+                  {t('systemDatabases', { count: String(entry.systemDatabases.length), names: entry.systemDatabases.join(', ') })}
+                </p>
+              )
+            : null}
         </button>
       ))}
       {catalog.known.map(entry => (
@@ -235,7 +242,11 @@ function FormDialog(props: {
             disabled={props.saving}
             onChange={(event) => { props.onEditExtra(field.key, event.target.value) }}
           />
-          <p className={styles.hint}>{field.required ? t('requiredHint') : t('optionalHint')}</p>
+          {/* The dialect's own sentence when it has one, so a field it invented
+              is explained in its words rather than the plugin's. */}
+          <p className={styles.hint}>
+            {field.hint ?? (field.required ? t('requiredHint') : t('optionalHint'))}
+          </p>
         </div>
       ))}
       <div className={styles.field}>

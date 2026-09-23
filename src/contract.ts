@@ -112,6 +112,8 @@ export interface DialectFieldDescriptor {
   required: boolean
   /** Label the page shows. */
   label?: string
+  /** One line the page shows under the control, written by the dialect. */
+  hint?: string
   /** Whether the control is write-only. */
   sensitive?: boolean
 }
@@ -130,6 +132,8 @@ export interface DialectDescriptor {
   configFields: DialectFieldDescriptor[]
   /** Values it gives the shared connection fields. */
   connectionDefaults: ConnectionDefaults
+  /** Schemas the server owns, which `db_databases` hides unless the call asks. */
+  systemDatabases: string[]
 }
 
 /** One database type that is known but has no dialect package installed. */

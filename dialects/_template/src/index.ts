@@ -88,8 +88,11 @@ export const TEMPLATE_DIALECT: DatabaseDialect = {
   // contract fact: the tools degrade instead of running a statement you lack.
   capabilities: new Set<DialectCapability>(['databases', 'tables', 'columns', 'version']),
 
-  // TODO: fields only your server needs; the page renders them and the values
-  // arrive in `connection.extra`.
+  // TODO: fields only your server needs, such as
+  // `[{ key: 'serviceName', kind: 'text', default: 'ORCL', required: true,
+  //     label: 'Service name', hint: 'The PDB service this connection targets.' }]`.
+  // `label` and `hint` are your text — the page shows them as written — and the
+  // values arrive in `connection.extra`.
   configFields: [],
 
   // TODO: your server's own values for the shared fields, such as
