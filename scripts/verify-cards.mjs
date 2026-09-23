@@ -22,7 +22,7 @@ import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import * as mysqlReadOnly from '../src/index.ts'
 import * as mysqlDialect from '../dialects/mysql/src/index.ts'
 import { TOOL_ROW_KEYS, callText, dbCardModel, errorText, genericText } from '../src/client/card-model.ts'
-import { CARD_BYTES } from '../src/tools.ts'
+import { CARD_BYTES } from '../src/card-budget.ts'
 
 const ctx = new Context()
 await ctx.plugin(SystemPrompt, {})

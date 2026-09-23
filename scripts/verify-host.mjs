@@ -17,7 +17,7 @@ import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools/src/json-schema.
 import * as mysqlReadOnly from '../src/index.ts'
 import { dialectCatalog } from '../src/index.ts'
 import { DatabaseAccess } from '../src/connection.ts'
-import { CARD_BYTES } from '../src/tools.ts'
+import { CARD_BYTES } from '../src/card-budget.ts'
 import * as mysqlDialect from '../dialects/mysql/src/index.ts'
 import { MYSQL_DIALECT } from '../dialects/mysql/src/index.ts'
 

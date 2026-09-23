@@ -41,7 +41,8 @@
     "verify:host": "node --import tsx/esm scripts/verify-host.mjs",
     "verify:settings": "node --import tsx/esm scripts/verify-settings.mts",
     "verify:loader": "node --import tsx/esm tests/loader-smoke.mjs",
-    "verify:cards": "node --import tsx/esm scripts/verify-cards.mjs"
+    "verify:cards": "node --import tsx/esm scripts/verify-cards.mjs",
+    "card:live": "node --experimental-strip-types scripts/verify-live.mjs"
   },
   "dependencies": {
     "clsx": "^2.1.1",

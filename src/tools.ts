@@ -18,6 +18,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { CARD_BYTES } from './card-budget.ts'
 import type { ConnectionDefaults, ConnectionProfile, DatabaseSettings } from './contract.ts'
 import { connectionSummaries, resolveProfile } from './connections.ts'
 import type { DatabaseAccess } from './connection.ts'
@@ -72,9 +73,6 @@ const CARD_ROWS = 50
 
 /** Items one list card carries, for the same reason. */
 const CARD_ITEMS = 100
-
-/** Serialized UTF-8 bytes one card may take. The checks bound this same constant. */
-export const CARD_BYTES = 16 * 1024
 
 /**
  * One value's size as it will be stored, in UTF-8 bytes rather than UTF-16 code
