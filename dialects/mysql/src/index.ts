@@ -137,6 +137,13 @@ class MysqlSession implements DialectSession {
     // mysql2 takes no AbortSignal, so cancellation ends the pool instead. The
     // session is unusable afterwards, which is why the runner drops it from its
     // cache and the next call opens a fresh one.
+    // Best-effort, not the cancellation's contract. Measured on a real server: an
+    // empty `cancel` here leaves every observable of a single call the same — the
+    // server runs the statement to completion, the call comes back, and the next
+    // call works — because the runner evicts any session whose call was cancelled
+    // whether or not the dialect acted. What this buys is visible only under
+    // concurrency: the pool is marked closed while the statement still runs, so a
+    // sibling call cannot take a connection from it in the meantime.
     const cancel = (): void => { void this.end() }
     signal?.addEventListener('abort', cancel, { once: true })
     try {

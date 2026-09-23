@@ -189,6 +189,49 @@ async function checkExplain(name) {
 }
 
 /**
+ * How many connections the server holds for this account.
+ *
+ * Read through the plugin's own tools, which means through the same pool the
+ * calls under test use: the number says whether that pool is holding more
+ * connections than it started with, not how many the server has in total.
+ * @param name - the connection to look through.
+ * @returns the count.
+ */
+async function openConnections(name) {
+  const value = await call('db_query', {
+    connection: name,
+    sql: 'SELECT COUNT(*) AS open_connections FROM information_schema.processlist'
+      + " WHERE USER = SUBSTRING_INDEX(CURRENT_USER(), '@', 1)",
+  })
+  return Number(firstValue(value.rows[0]))
+}
+
+/**
+ * Wait until the server is really running a statement that sleeps.
+ *
+ * Reading the server is how a check learns a call is in flight. Sleeping instead
+ * races the machine: on a slow one the statement may already be finished, and the
+ * cancellation would land after the call rather than during it — measuring a
+ * different path than the one this claims to.
+ * @param name - the connection to look through.
+ * @param seconds - the sleep the statement is expected to be running.
+ * @returns how many polls it took to see it.
+ * @throws {Error} when no such statement appears.
+ */
+async function waitForSleeping(name, seconds) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const value = await call('db_query', {
+      connection: name,
+      sql: 'SELECT COUNT(*) AS sleeping FROM information_schema.processlist'
+        + ` WHERE USER = SUBSTRING_INDEX(CURRENT_USER(), '@', 1) AND INFO LIKE 'SELECT SLEEP(${String(seconds)}%'`,
+    })
+    if (Number(firstValue(value.rows[0])) > 0) return attempt
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  throw new Error(`no statement sleeping for ${String(seconds)} s appeared on the server`)
+}
+
+/**
  * Cancellation, against a real pool: what aborting does, and what survives it.
  *
  * The seam's own note says a cancellation retires the session rather than
@@ -202,14 +245,14 @@ async function checkExplain(name) {
  */
 async function checkCancellation(name) {
   const sleepSeconds = 4
+  const before = await openConnections(name)
   const controller = new AbortController()
   const pending = ctx.tools.get('db_query').execute(
     { connection: name, sql: `SELECT SLEEP(${String(sleepSeconds)}) AS slept` },
     { signal: controller.signal },
   )
-  // Let the statement reach the server first, so what is measured is a
-  // cancellation in flight rather than one before the call started.
-  await new Promise(resolve => setTimeout(resolve, 500))
+  // A cancellation in flight, not one before the call: the server says when.
+  const polls = await waitForSleeping(name, sleepSeconds)
   const at = Date.now()
   controller.abort()
   const outcome = await pending.then(() => undefined, error => error)
@@ -228,6 +271,14 @@ async function checkCancellation(name) {
   const after = await call('db_query', { connection: name, sql: 'SELECT 1 AS one' })
   assert.equal(after.rows.length, 1, 'the next call reconnects and works')
   console.log('  cancellation: the next call succeeded — a retired session is replaced, not reused')
+
+  // A reading, not an assertion: whether the pool holds a different number of
+  // server connections after a cancellation. It is here because it is the
+  // obvious-looking way to tell "the session was retired" from "the signal did
+  // nothing", and the number says whether that way works.
+  const connections = await openConnections(name)
+  console.log(`  cancellation: server connections ${String(before)} → ${String(connections)},`
+    + ` statement seen running after ${String(polls)} poll(s)`)
 }
 
 /**
@@ -257,7 +308,8 @@ async function checkTimeout(base) {
   const elapsed = Date.now() - started
   assert.ok(outcome instanceof Error, 'a statement past the query timeout fails instead of hanging')
   assert.ok(elapsed < 4500, `and it fails before the statement would have finished (${String(elapsed)} ms)`)
-  console.log(`  timeout: a 1.5 s timeout ended a 5 s statement after ${String(elapsed)} ms`)
+  console.log(`  timeout: a 1.5 s timeout ended a 5 s statement after ${String(elapsed)} ms`
+    + ` (measured on "${base.name}" only — the timeout lives on a connection)`)
   await timing.fiber.dispose()
 }
 
