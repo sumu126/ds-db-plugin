@@ -20,6 +20,7 @@ import type {} from '@deepseek-ai/dsh-credentials'
 import type {} from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-tools'
 import { DatabaseAccess } from './connection.ts'
+import { activeConnection } from './connections.ts'
 import {
   DB_DIALECTS_PATH, DB_SETTINGS_NAMESPACE, DB_TEST_PATH, UNSET_PORT,
   type ConnectionProfile, type DatabaseSettings, type DialectCatalog, type ProbeRequest,
@@ -30,7 +31,10 @@ import { compositionEntry, Config, DatabaseSettingsSchema } from './settings.ts'
 import { applyDatabaseTools } from './tools.ts'
 
 export type { ConnectionProfile, DatabaseSettings } from './contract.ts'
+export type { ConnectionSummary } from './connections.ts'
 export type { Config as DatabaseConfig } from './settings.ts'
+
+export { activeConnection, connectionSummaries, resolveProfile } from './connections.ts'
 
 export { Config } from './settings.ts'
 
@@ -74,26 +78,8 @@ interface ProbeHost {
 }
 
 /**
- * The saved connection the tools address: the one `activeId` names, else the
- * only saved one.
- * @param settings - the current resolved settings section.
- * @returns the connection every tool call runs against.
- * @throws {Error} when nothing usable is saved, naming what is saved otherwise.
- */
-export function activeConnection(settings: DatabaseSettings): ConnectionProfile {
-  const active = settings.connections.find(profile => profile.id === settings.activeId)
-  if (active !== undefined) return active
-  const only = settings.connections.length === 1 ? settings.connections[0] : undefined
-  if (only !== undefined) return only
-  const names = settings.connections.map(profile => profile.name).join(', ')
-  throw new Error(settings.connections.length === 0
-    ? 'no database connection is saved; add one on the database settings page'
-    : `connection "${settings.activeId}" is not saved; saved connections: ${names}`)
-}
-
-/**
- * Register the settings namespace, the dialect registry with its own dialect,
- * the four read-only tools, and the page's connection probes.
+ * Register the settings namespace, the dialect registry, the read-only tools,
+ * and the page's connection probes.
  * @param ctx - the plugin context.
  * @param config - composition values the settings namespace falls back to.
  */
@@ -119,15 +105,16 @@ export function apply(ctx: Context, config: Config): void {
   // database type, MySQL included, arrives as a package that registers itself
   // through `inject: ['databaseDialects']`.
   const registry = new DatabaseDialectRegistry(ctx)
-  const readDialect = (): DatabaseDialect => resolveDialect(registry, activeConnection(readSettings()).dialect)
+  /** The dialect one saved connection is addressed through. */
+  const readDialectFor = (profile: ConnectionProfile): DatabaseDialect => resolveDialect(registry, profile.dialect)
   // The composition entry names the dialect it starts on, and an empty one
   // means the first dialect the deployment registers — the plugin names no
   // database type, so it names no default type either.
   const initialDialect = entry.connections.find(profile => profile.id === entry.activeId)?.dialect ?? ''
 
   const access = new DatabaseAccess({
-    connection: async () => await resolveConnection(ctx, activeConnection(readSettings()), readDialect()),
-    dialect: readDialect,
+    connection: async profile => await resolveConnection(ctx, profile, readDialectFor(profile)),
+    dialect: readDialectFor,
   })
   ctx.effect(() => () => { void access.dispose() }, 'ds-db: database session')
   // Model-facing descriptions are fixed when the tools are registered, so they
@@ -145,9 +132,9 @@ export function apply(ctx: Context, config: Config): void {
     registered = true
     applyDatabaseTools(ctx, {
       access,
-      dialect: readDialect,
+      dialectFor: readDialectFor,
       described: dialectFacts(registry, initialDialect),
-      settings: () => activeConnection(readSettings()),
+      settings: readSettings,
     })
   }
   ctx.effect(() => {
@@ -326,7 +313,7 @@ async function probeProfile(
     const connection = await resolveConnection(ctx, profile, dialect)
     const access = new DatabaseAccess({ connection: async () => connection, dialect: () => dialect })
     try {
-      const probe = await access.probe()
+      const probe = await access.probe(profile)
       return { ok: true, version: probe.version, latencyMs: probe.latencyMs }
     } finally {
       await access.dispose()

@@ -17,7 +17,8 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { ConnectionProfile } from './contract.ts'
+import type { ConnectionProfile, DatabaseSettings } from './contract.ts'
+import { connectionSummaries, resolveProfile } from './connections.ts'
 import type { DatabaseAccess } from './connection.ts'
 import type { DatabaseDialect, DialectCapability, DialectFacts, DialectIndexRow } from './dialect.ts'
 import { assertReadOnlyStatement, familiesPhrase } from './sql-guard.ts'
@@ -26,17 +27,26 @@ import { assertReadOnlyStatement, familiesPhrase } from './sql-guard.ts'
 export interface DatabaseToolsFace {
   /** The session runner, re-resolving connection and dialect per call. */
   access: DatabaseAccess
-  /** The dialect in force, re-resolved per call. */
-  dialect: () => DatabaseDialect
+  /**
+   * The dialect one saved connection is addressed through.
+   * @param profile - the connection the call addresses.
+   */
+  dialectFor: (profile: ConnectionProfile) => DatabaseDialect
   /**
    * The dialect facts the model-facing descriptions are written from, fixed
-   * when the tools are registered. It is separate from {@link dialect} because
-   * a dialect package loads after this plugin: the wording is settled once,
-   * while every call still resolves the dialect that is really in force.
+   * when the tools are registered. It is separate from {@link dialectFor}
+   * because a dialect package loads after this plugin: the wording is settled
+   * once, while every call still resolves the dialect that is really in force.
    */
   described: DialectFacts
-  /** Current resolved settings section. */
-  settings: () => ConnectionProfile
+  /** The current settings section, holding every saved connection. */
+  settings: () => DatabaseSettings
+}
+
+/** The parameter one call names its connection with, when it names one. */
+const CONNECTION_PARAMETER = {
+  type: 'string' as const,
+  description: 'Saved connection to run against, by its name. Defaults to the connection in use; call db_connections to see what is saved.',
 }
 
 /**
@@ -83,12 +93,25 @@ function resolveDatabase(settings: ConnectionProfile, requested: string | undefi
  * @param face - the session runner, the dialect reader, and the settings reader every call uses.
  */
 export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void {
-  const { access, dialect, described, settings } = face
+  const { access, dialectFor, described, settings } = face
+
+  /**
+   * The connection one call addresses and the dialect it runs through, both in
+   * force at that moment: a call may name any saved connection, and an unnamed
+   * one takes the connection the page marks as in use.
+   * @param requested - the connection the call named, if any.
+   * @returns the profile and its dialect.
+   */
+  const addressed = (requested: string | undefined): { profile: ConnectionProfile, view: DatabaseDialect } => {
+    const profile = resolveProfile(settings(), requested)
+    return { profile, view: dialectFor(profile) }
+  }
 
   ctx.tools.register(defineTool({
     name: 'db_databases',
     description: `List the ${described.label} databases this connection can see, with each one's default character set and collation.`,
     parameters: {
+      connection: CONNECTION_PARAMETER,
       include_system: {
         type: 'boolean',
         description: `Include the server's own schemas (${described.systemDatabases.join(', ')}). Defaults to false.`,
@@ -122,9 +145,9 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
       }],
     },
     async execute(args) {
-      const view = dialect()
+      const { profile: target, view } = addressed(args.connection)
       requireCapability(view, 'databases')
-      const databases = await access.run(view.databases())
+      const databases = await access.run(target, view.databases())
       const includeSystem = args.include_system === true
       const rows = view.capabilities.has('charset')
         ? databases
@@ -139,6 +162,7 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
     name: 'db_tables',
     description: `List the tables and views of one ${described.label} database, with engine, row-count estimate, and table comment.`,
     parameters: {
+      connection: CONNECTION_PARAMETER,
       database: { type: 'string', description: 'Database to list. Defaults to the default database of the connection in use.' },
     },
     output: {
@@ -174,10 +198,10 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
       }],
     },
     async execute(args) {
-      const view = dialect()
+      const { profile: target, view } = addressed(args.connection)
       requireCapability(view, 'tables')
-      const database = resolveDatabase(settings(), args.database, view)
-      const tables = await access.run(view.tables(database))
+      const database = resolveDatabase(target, args.database, view)
+      const tables = await access.run(target, view.tables(database))
       // A server that cannot estimate row counts reports none rather than
       // letting its dialect invent a number the model would trust.
       const rows = view.capabilities.has('estimatedRows')
@@ -191,6 +215,7 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
     name: 'db_describe',
     description: `Describe one ${described.label} table: its columns, its indexes, and the statement that creates it.`,
     parameters: {
+      connection: CONNECTION_PARAMETER,
       table: { type: 'string', required: true, description: 'Table or view to describe.' },
       database: { type: 'string', description: 'Database holding the table. Defaults to the default database of the connection in use.' },
     },
@@ -256,20 +281,20 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
       }],
     },
     async execute(args) {
-      const view = dialect()
+      const { profile: target, view } = addressed(args.connection)
       requireCapability(view, 'columns')
-      const database = resolveDatabase(settings(), args.database, view)
+      const database = resolveDatabase(target, args.database, view)
       const table = args.table.trim()
       if (table.length === 0) throw new Error('table must be a non-empty name')
-      const columns = await access.run(view.columns(database, table))
+      const columns = await access.run(target, view.columns(database, table))
       if (columns.length === 0) {
         throw new Error(`table ${database}.${table} does not exist or is not visible to this connection`)
       }
       const indexes = view.capabilities.has('indexes')
-        ? await access.run(view.indexes(database, table))
+        ? await access.run(target, view.indexes(database, table))
         : []
       const create = view.capabilities.has('createStatement')
-        ? await access.run(view.createStatement(database, table))
+        ? await access.run(target, view.createStatement(database, table))
         : []
       return {
         database,
@@ -293,6 +318,7 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
       + `Only ${described.rules.families.length === 0 ? 'read-only statements' : familiesPhrase(described.rules.families, 'and')} are accepted; a single statement per call. `
       + `Results are cut at the deployment's row cap, so ask for the rows you need with WHERE, ORDER BY, and ${described.rowBoundHint}.`,
     parameters: {
+      connection: CONNECTION_PARAMETER,
       sql: { type: 'string', required: true, description: 'One read-only statement, without a trailing semicolon requirement.' },
     },
     output: {
@@ -318,9 +344,10 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
       },
     },
     async execute(args) {
-      const view = dialect()
+      const { profile: target, view } = addressed(args.connection)
       const statement = assertReadOnlyStatement(args.sql, view.rules)
-      const outcome = await access.query(view.applyRowLimit(statement, settings().maxRows))
+      // The row cap belongs to the connection that answers the call.
+      const outcome = await access.query(target, view.applyRowLimit(statement, target.maxRows))
       return {
         columns: outcome.columns,
         rows: outcome.rows,
@@ -339,6 +366,7 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
       name: 'db_sample',
       description: `Read a few rows from one ${described.label} table, so the shape of its data is visible before a query is written.`,
       parameters: {
+        connection: CONNECTION_PARAMETER,
         table: { type: 'string', required: true, description: 'Table or view to read.' },
         database: { type: 'string', description: 'Database holding the table. Defaults to the default database of the connection in use.' },
         rows: { type: 'integer', description: 'How many rows to read. Defaults to 5, and never exceeds the deployment row cap.' },
@@ -360,17 +388,16 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
         }],
       },
       async execute(args) {
-        const view = dialect()
+        const { profile: target, view } = addressed(args.connection)
         requireCapability(view, 'sample')
         const sample = view.sample
         if (sample === undefined) throw new Error(`this ${view.label} connection does not support sample`)
-        const current = settings()
-        const database = resolveDatabase(current, args.database, view)
+        const database = resolveDatabase(target, args.database, view)
         const table = args.table.trim()
         if (table.length === 0) throw new Error('table must be a non-empty name')
         const requested = typeof args.rows === 'number' ? Math.floor(args.rows) : 5
-        const rows = Math.min(Math.max(requested, 1), current.maxRows)
-        const outcome = await access.query(sample(database, table, rows).statement.sql, [])
+        const rows = Math.min(Math.max(requested, 1), target.maxRows)
+        const outcome = await access.query(target, sample(database, table, rows).statement.sql, [])
         return { database, table, columns: outcome.columns, rows: outcome.rows }
       },
     }))
@@ -381,6 +408,7 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
       name: 'db_explain',
       description: `Explain how ${described.label} would execute one read-only statement, without running it.`,
       parameters: {
+        connection: CONNECTION_PARAMETER,
         sql: { type: 'string', required: true, description: 'One read-only statement to explain.' },
       },
       output: {
@@ -394,16 +422,73 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
         render: (_args, value) => [{ type: 'text', text: value.plan.join('\n') }],
       },
       async execute(args) {
-        const view = dialect()
+        const { profile: target, view } = addressed(args.connection)
         requireCapability(view, 'explain')
         const explain = view.explain
         if (explain === undefined) throw new Error(`this ${view.label} connection does not support explain`)
         const statement = assertReadOnlyStatement(args.sql, view.rules)
-        const plan = await access.run(explain(statement))
+        const plan = await access.run(target, explain(statement))
         return { plan }
       },
     }))
   }
+
+  // Which connections exist is the one thing a model cannot discover from the
+  // other tools, and the one it needs before it can address any but the default.
+  ctx.tools.register(defineTool({
+    name: 'db_connections',
+    description: 'List the saved database connections by name, with the type and server each one reaches and which one a call runs against by default.',
+    parameters: {},
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          active: { type: 'string', required: true, description: 'Name of the connection an unnamed call runs against; empty when none is saved.' },
+          connections: {
+            type: 'array',
+            required: true,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                name: { type: 'string', required: true },
+                dialect: { type: 'string', required: true, description: 'Registered database type; empty means the deployment default.' },
+                host: { type: 'string', required: true },
+                port: { type: 'integer', required: true, description: '0 when the type supplies its own default.' },
+                database: { type: 'string', required: true, description: 'Default database, empty when every call names one.' },
+                active: { type: 'boolean', required: true },
+              },
+            },
+          },
+        },
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: value.connections.length === 0
+          ? 'No database connection is saved.'
+          : [
+              `Default connection: ${value.active.length === 0 ? 'none' : value.active}`,
+              ...value.connections.map(connection =>
+                `- ${connection.name} [${connection.dialect.length === 0 ? 'default type' : connection.dialect}] `
+                + `${connection.host}:${String(connection.port)}`
+                + `${connection.database.length === 0 ? '' : `/${connection.database}`}`
+                + `${connection.active ? ' (default)' : ''}`),
+            ].join('\n'),
+      }],
+    },
+    async execute() {
+      const section = settings()
+      // Listing what is saved must not fail when nothing is: the empty answer is
+      // exactly the one a model needs to ask the user for a connection.
+      const active = section.connections.find(profile => profile.id === section.activeId)
+        ?? section.connections[0]
+      return {
+        active: active?.name ?? '',
+        connections: connectionSummaries(section),
+      }
+    },
+  }))
 }
 
 /** One index as `db_describe` reports it. */

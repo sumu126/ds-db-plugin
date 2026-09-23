@@ -230,6 +230,29 @@ assert.ok(picked instanceof Error, 'the active connection is what the call reach
 assert.match(picked.message, /b@10\.0\.0\.2:1/, 'the tools addressed the active connection, not the first')
 console.log('active connection: the tools addressed b@10.0.0.2:1')
 
+// A call may address any saved connection by name, not only the default one.
+const byName = await third.tools.get('db_tables').execute({ database: 'app', connection: 'A' }, undefined)
+  .then(() => undefined, error => error)
+assert.match(byName.message, /a@10\.0\.0\.1:1/, 'naming a connection addressed that one')
+console.log(`named connection: ${byName.message}`)
+
+// A name nothing carries is refused, and the refusal lists what is saved.
+const unknown = await third.tools.get('db_tables').execute({ database: 'app', connection: 'nope' }, undefined)
+  .then(() => undefined, error => error)
+assert.match(unknown.message, /no saved connection is named "nope"; saved connections: A, B/)
+console.log(`unknown connection: ${unknown.message}`)
+
+// The listing is how a model discovers the names it can address.
+const savedConnections = await third.tools.get('db_connections').execute({}, undefined)
+assert.deepEqual(savedConnections.connections.map(connection => connection.name), ['A', 'B'])
+assert.equal(savedConnections.active, 'B', 'the listing names the default connection')
+// A listing a model reads carries no credential reference, only where it reaches.
+assert.deepEqual(
+  Object.keys(savedConnections.connections[0]).sort(),
+  ['active', 'database', 'dialect', 'host', 'id', 'name', 'port'],
+)
+console.log(`connections: ${savedConnections.active} is the default of ${savedConnections.connections.length}`)
+
 // An undeclared capability is refused at registration, not silently accepted.
 assert.throws(
   () => third.databaseDialects.register({ ...MYSQL_DIALECT, name: 'bogus', capabilities: new Set(['teleport']) }),

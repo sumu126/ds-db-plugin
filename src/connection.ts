@@ -11,8 +11,19 @@
  * @module dsh-ds-db/src/connection
  */
 
+import type { ConnectionProfile } from './contract.ts'
 import type { DatabaseConnection, DatabaseDialect, DialectQuery, DialectSession, DialectStatement } from './dialect.ts'
 import { toJsonRow, type DbRow, type DbScalar } from './value.ts'
+
+/**
+ * Sessions one plugin instance keeps open at once.
+ *
+ * Calls may address different connections in the same session, so a second
+ * connection must not close the first one's session; beyond this many, the
+ * least recently used is retired, so a page full of connections cannot hold an
+ * unbounded number of pools open.
+ */
+const SESSION_LIMIT = 4
 
 /** One statement's outcome, already bounded and JSON-safe. */
 export interface QueryOutcome {
@@ -36,10 +47,16 @@ export interface ConnectionProbe {
 
 /** What one operation resolves at the moment it runs. */
 export interface DatabaseAccessFace {
-  /** The connection to address, re-resolved per call. */
-  connection: () => Promise<DatabaseConnection>
-  /** The dialect to run through, re-resolved per call. */
-  dialect: () => DatabaseDialect
+  /**
+   * The resolved connection for one saved profile.
+   * @param profile - the connection the call addresses.
+   */
+  connection: (profile: ConnectionProfile) => Promise<DatabaseConnection>
+  /**
+   * The dialect one saved profile is addressed through.
+   * @param profile - the connection the call addresses.
+   */
+  dialect: (profile: ConnectionProfile) => DatabaseDialect
 }
 
 /** One open session and the identity it was opened for. */
@@ -75,38 +92,41 @@ function messageOf(error: unknown): string {
 /**
  * One plugin instance's read-only database access.
  *
- * Every call re-resolves the connection and the dialect, so a settings edit, a
- * new stored password, or a reconfigured dialect is honoured by the next call;
- * a session is opened on the first call and replaced only when its identity
- * changes.
+ * Every call names the profile it addresses and re-resolves it, so a settings
+ * edit, a new stored password, or a reconfigured dialect is honoured by the
+ * next call. Sessions are kept per connection identity, so a call to one
+ * connection does not disturb another's pool; past {@link SESSION_LIMIT} the
+ * least recently used one is closed.
  */
 export class DatabaseAccess {
-  private live: LiveSession | undefined
+  private readonly sessions = new Map<string, LiveSession>()
 
   /** @param face - the connection and dialect readers every call resolves through. */
   constructor(private readonly face: DatabaseAccessFace) {}
 
   /**
    * Run one dialect query and project its rows onto the shape it promises.
+   * @param profile - the saved connection the call addresses.
    * @param query - the query to run.
    * @returns one entry per row the server answered.
    * @throws {Error} when the server refuses the statement or the session cannot reach it.
    */
-  async run<R>(query: DialectQuery<R>): Promise<R[]> {
-    const live = await this.session()
+  async run<R>(profile: ConnectionProfile, query: DialectQuery<R>): Promise<R[]> {
+    const live = await this.session(profile)
     const { rows } = await this.statement(live, query.statement)
     return rows.map(row => query.project(row))
   }
 
   /**
    * Run one already-guarded statement and project its rows to lossless JSON.
+   * @param profile - the saved connection the call addresses.
    * @param sql - the statement to execute, in the dialect's own placeholder style.
    * @param values - values the dialect's driver binds.
    * @returns the bounded, JSON-safe outcome.
    * @throws {Error} when the server refuses the statement or the session cannot reach it.
    */
-  async query(sql: string, values: readonly DbScalar[] = []): Promise<QueryOutcome> {
-    const live = await this.session()
+  async query(profile: ConnectionProfile, sql: string, values: readonly DbScalar[] = []): Promise<QueryOutcome> {
+    const live = await this.session(profile)
     const { rows, columns, elapsedMs } = await this.statement(live, { sql, values })
     return {
       columns,
@@ -117,14 +137,15 @@ export class DatabaseAccess {
   }
 
   /**
-   * Prove the saved connection works, for the settings page.
+   * Prove one saved connection works, for the settings page.
+   * @param profile - the saved connection to probe.
    * @returns the server version and the probe's round trip time.
    * @throws {Error} when the connection fails or the server answers no version.
    */
-  async probe(): Promise<ConnectionProbe> {
-    const live = await this.session()
+  async probe(profile: ConnectionProfile): Promise<ConnectionProbe> {
+    const live = await this.session(profile)
     const started = Date.now()
-    const versions = await this.run(live.dialect.version())
+    const versions = await this.run(profile, live.dialect.version())
     const version = versions[0]
     if (version === undefined || version.length === 0) {
       throw new Error(`the server did not answer a version for ${connectionLabel(live.connection)}`)
@@ -132,34 +153,52 @@ export class DatabaseAccess {
     return { version, latencyMs: Date.now() - started }
   }
 
-  /** Close the live session; the plugin calls it on unload. */
+  /** Close every open session; the plugin calls it on unload. */
   async dispose(): Promise<void> {
-    const live = this.live
-    this.live = undefined
-    if (live === undefined) return
-    try {
-      await live.session.close()
-    } catch (error: unknown) {
-      // A session that cannot drain is already unusable, and nothing may block unload.
-      process.emitWarning(`ds-db: closing the ${live.dialect.label} session failed: ${messageOf(error)}`)
+    const live = [...this.sessions.values()]
+    this.sessions.clear()
+    for (const one of live) await this.close(one, 'closing')
+  }
+
+  /** The session for one connection identity, opening or retiring as needed. */
+  private async session(profile: ConnectionProfile): Promise<LiveSession> {
+    const dialect = this.face.dialect(profile)
+    const connection = await this.face.connection(profile)
+    const key = sessionKey(connection, dialect)
+    const existing = this.sessions.get(key)
+    if (existing !== undefined) {
+      // Re-inserting moves it to the end of the map's order, which is what makes
+      // the retirement below drop the least recently used session.
+      this.sessions.delete(key)
+      this.sessions.set(key, existing)
+      return existing
+    }
+    const opened: LiveSession = { key, dialect, connection, session: await dialect.open(connection) }
+    this.sessions.set(key, opened)
+    await this.retireOverflow()
+    return opened
+  }
+
+  /** Close the least recently used session while the cache is over its limit. */
+  private async retireOverflow(): Promise<void> {
+    while (this.sessions.size > SESSION_LIMIT) {
+      const oldestKey = this.sessions.keys().next().value
+      if (oldestKey === undefined) return
+      const oldest = this.sessions.get(oldestKey)
+      this.sessions.delete(oldestKey)
+      if (oldest !== undefined) await this.close(oldest, 'retiring the least recently used')
     }
   }
 
-  /** The live session for the current identity, opening or retiring as needed. */
-  private async session(): Promise<LiveSession> {
-    const dialect = this.face.dialect()
-    const connection = await this.face.connection()
-    const key = sessionKey(connection, dialect)
-    const live = this.live
-    if (live !== undefined && live.key === key) return live
-    const opened: LiveSession = { key, dialect, connection, session: await dialect.open(connection) }
-    this.live = opened
-    if (live !== undefined) {
-      await live.session.close().catch((error: unknown) => {
-        process.emitWarning(`ds-db: retiring the previous ${live.dialect.label} session failed: ${messageOf(error)}`)
-      })
+  /** Close one session, reporting a failure instead of letting it block the caller. */
+  private async close(live: LiveSession, doing: string): Promise<void> {
+    try {
+      await live.session.close()
+    } catch (error: unknown) {
+      // A session that cannot drain is already unusable, and nothing may block
+      // an unload or the next call.
+      process.emitWarning(`ds-db: ${doing} the ${live.dialect.label} session failed: ${messageOf(error)}`)
     }
-    return opened
   }
 
   /** Run one statement on a live session, wrapping any refusal with the connection it names. */
