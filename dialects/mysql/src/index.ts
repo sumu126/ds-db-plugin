@@ -144,6 +144,11 @@ class MysqlSession implements DialectSession {
     // whether or not the dialect acted. What this buys is visible only under
     // concurrency: the pool is marked closed while the statement still runs, so a
     // sibling call cannot take a connection from it in the meantime.
+    //
+    // That conclusion is conditional on the runner as it stands, whose eviction is
+    // driven by `signal.aborted`. A runner that dropped that check — seeing
+    // `usable()` as sufficient — would leave this dialect's `usable()` carrying
+    // correctness instead, and this `cancel` would stop being optional.
     const cancel = (): void => { void this.end() }
     signal?.addEventListener('abort', cancel, { once: true })
     try {

@@ -52,3 +52,27 @@
 | M6 | 可选工具 `db_sample` / `db_explain` 按能力注册；结果卡片（`presentationMeta` + `tool.call.toolview`）与 `verify:cards` | ✅ |
 
 新增文件：`src/dialect-audit.ts`（自检）、`src/dialect-catalog.ts`（已知方言包清单）。
+
+## 检查的归属（谁守什么）
+
+越往下越贵，也越接近真实：**桩守结构、真库守行为、白盒守实现细节**。一条检查不可能同时拥有前两者。
+
+| 检查 | 挂什么 | 守什么 |
+| --- | --- | --- |
+| 24 例单元 | 纯函数 | 只读判定（含字面量/注释绕过）、方言 facts、注册校验 |
+| `verify:host` | 真 ToolRuntime + 桩方言 | 工具面、能力降级、**会话淘汰结构**（桩的 `opens`/`closes` 计数）、输出 schema、卡片元数据 |
+| `verify:settings` | + 真设置服务 | 工具读到的是用户文档，而非组合兜底 |
+| `verify:loader` | 真 Loader + 一次性 `DSH_HOME` | 组合能否解析、注入是否满足、卸载是否干净 |
+| `verify:cards` | Host + 浏览器半边模型（Node） | 两端往返、畸形元数据回退、标题、字节预算与 recovery |
+| `card:live`（手工） | 已记录的会话日志 | 真实数据上的卡片字节（中文三字节、宽单元格） |
+| `db:live`（手工） | **真服务器** | 行形状、（跨来源一致）、卡片对规范值、`db_explain`、取消的**可见行为**、超时 |
+
+## Backlog
+
+都不是债，只是还没到做的时候：
+
+| 项 | 前置条件 | 内容 |
+| --- | --- | --- |
+| PTC / 嵌套分发态 | 需要 PTC 环境 | 由 `parentCallId` 守卫 + 核心「只对顶层调用持久化 meta」兜着；验收即「嵌套的 `db_query` 落在通用行」 |
+| 白盒假池用例 | 可选 | 把 `MysqlSession` 的池参数放宽成 `{ query, end }` 结构接口，用计数假池断言 abort 时 `end()` 被调用、且 `usable()` 随之翻 `false`（契约说这两件事耦合）。守的是「方言真的尽力了」，行为层观测不到（见 `dialects/mysql/src/index.ts` 的 `cancel` 注释） |
+| Postgres 真方言 | 杠杆已铺好 | 接上后 `db:live` 五条断言立刻能跑它。第一步是把 `db:live` 里的语句片段参数化成 `{ probe, sleep, countTables, countDatabases }`；已知会撞上的四点差异：`pg_sleep`、`pg_database`、`SHOW FULL TABLES` 无对应物（`information_schema.tables` 可移植）、`database` 在 PG 上是**承重**的（连上即是一个库，`checkShapes` 里「默认库第一张表」那段要重设计） |
