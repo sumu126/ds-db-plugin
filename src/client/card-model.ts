@@ -53,6 +53,14 @@ export interface ListCard {
 /** What one settled call draws: a card, or nothing when the generic row owns it. */
 export type DbCard = TableCard | ListCard
 
+/**
+ * The wire tool names this plugin draws cards for.
+ *
+ * It lives here rather than beside the views so a Node check can read it: the view
+ * module imports CSS, which a plain Node run cannot load.
+ */
+export const TOOL_ROW_KEYS = ['db_query', 'db_sample', 'db_tables', 'db_databases'] as const
+
 /** Whether one value is the kind of object a field can be read off. */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -175,6 +183,20 @@ export function genericText(block: ToolCallBlock): string {
     if (part.type === 'text' && typeof text === 'string') parts.push(text)
   }
   return parts.join('\n')
+}
+
+/**
+ * One call's own text: its arguments while it still runs, its result text once
+ * settled.
+ *
+ * A running call has no result to show, and its arguments are what there is —
+ * the shell's own row shows them for every tool, so claiming this tool's key must
+ * not be the thing that hides the statement being run.
+ * @param block - the frozen running-or-settled call node.
+ * @returns the text a generic row shows for this call.
+ */
+export function callText(block: ToolCallBlock): string {
+  return 'kind' in block ? genericText(block) : block.argsRaw
 }
 
 /**

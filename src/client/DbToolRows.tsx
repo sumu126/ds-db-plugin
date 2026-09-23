@@ -16,8 +16,8 @@ import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type { ToolCallViewProps } from '@deepseek-ai/dsh-client-ui-tool/client'
 import type { ToolCallBlock } from '@deepseek-ai/dsh-client-ui-chat/client'
-import { dbCardModel, errorText, genericText, type ListCard, type TableCard } from './card-model.ts'
-import { TOOL_NS, type ToolLocaleKey } from './tool-locales.ts'
+import { TOOL_ROW_KEYS, callText, dbCardModel, errorText, type ListCard, type TableCard } from './card-model.ts'
+import { TOOL_NS } from './tool-locales.ts'
 import styles from './db-rows.css'
 
 /** Props the renderer binds for one row this plugin owns. */
@@ -31,8 +31,9 @@ type Translate = DbRowProps['t']
  * dispatched inside another call, or metadata this version cannot read.
  */
 function FallbackRow({ toolName, block }: { toolName: string, block: ToolCallBlock }) {
-  const failure = errorText(block)
-  const text = failure.length === 0 ? genericText(block) : failure
+  // A failed call shows why it failed; otherwise the call's own text, which for a
+  // call that is still running is the statement it was given.
+  const text = errorText(block) || callText(block)
   return (
     <div className={styles.row}>
       <div className={styles.head}>
@@ -78,7 +79,16 @@ function TableView({ card, toolName, t }: { card: TableCard, toolName: string, t
                   // ordered set, so the position is what identifies one here.
                   <tr key={String(rowIndex)}>
                     {row.map((cell, cellIndex) => (
-                      <td key={String(cellIndex)} className={styles.td}>{cell === null ? '' : String(cell)}</td>
+                      <td
+                        key={String(cellIndex)}
+                        className={styles.td}
+                        // The column is cut to a fixed width, so hovering is the
+                        // only way to the rest of a long value; without this the
+                        // tail of a wide cell is simply lost to the reader.
+                        title={cell === null ? undefined : String(cell)}
+                      >
+                        {cell === null ? '' : String(cell)}
+                      </td>
                     ))}
                   </tr>
                 ))}
@@ -133,24 +143,30 @@ export function ListRow({ toolName, block, t }: DbRowProps) {
 }
 
 /**
- * Register the four rows a card can describe.
+ * The view that draws each claimed key.
  *
- * The keys are the wire tool names, so a tool this plugin does not register —
+ * Typed against the key table, so a key with no view — or a view with no key — is
+ * a compile error rather than a tool whose calls quietly fall back.
+ */
+const ROW_VIEWS: Record<(typeof TOOL_ROW_KEYS)[number], typeof TableRow> = {
+  db_query: TableRow,
+  db_sample: TableRow,
+  db_tables: ListRow,
+  db_databases: ListRow,
+}
+
+/**
+ * Register the rows a card can describe.
+ *
+ * The keys are wire tool names, so a tool this plugin does not claim —
  * `db_describe`, `db_explain`, and anything a dialect package adds later — keeps
  * the shell's generic row.
  * @param ctx - browser plugin context.
  */
 export function registerToolRows(ctx: ClientContext): void {
   ctx.slots.inject('tool.call.toolview', function* () {
-    yield ctx.slots.register({ name: 'tool.call.toolview', key: 'db_query', locale: TOOL_NS }, TableRow)
-    yield ctx.slots.register({ name: 'tool.call.toolview', key: 'db_sample', locale: TOOL_NS }, TableRow)
-    yield ctx.slots.register({ name: 'tool.call.toolview', key: 'db_tables', locale: TOOL_NS }, ListRow)
-    yield ctx.slots.register({ name: 'tool.call.toolview', key: 'db_databases', locale: TOOL_NS }, ListRow)
+    for (const key of TOOL_ROW_KEYS) {
+      yield ctx.slots.register({ name: 'tool.call.toolview', key, locale: TOOL_NS }, ROW_VIEWS[key])
+    }
   })
 }
-
-/** Keys this plugin claims, for the copy check that keeps the four in step. */
-export const TOOL_ROW_KEYS = ['db_query', 'db_sample', 'db_tables', 'db_databases'] as const
-
-/** Re-exported so a check can name the keys without importing the view. */
-export type { ToolLocaleKey }

@@ -21,7 +21,8 @@ import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import * as mysqlReadOnly from '../src/index.ts'
 import * as mysqlDialect from '../dialects/mysql/src/index.ts'
-import { dbCardModel, errorText, genericText } from '../src/client/card-model.ts'
+import { TOOL_ROW_KEYS, callText, dbCardModel, errorText, genericText } from '../src/client/card-model.ts'
+import { CARD_BYTES } from '../src/tools.ts'
 
 const ctx = new Context()
 await ctx.plugin(SystemPrompt, {})
@@ -31,6 +32,14 @@ await ctx.plugin(mysqlReadOnly, { host: '127.0.0.1', port: 1, user: 'nobody', da
 for (let attempt = 0; attempt < 100 && ctx.tools.get('db_query') === undefined; attempt++) {
   await new Promise(resolve => setTimeout(resolve, 10))
 }
+
+// The keys the client claims have to be tools that really exist: a rename on the
+// Host side would otherwise leave the browser drawing rows for nothing, and the
+// generic fallback would hide it.
+for (const key of TOOL_ROW_KEYS) {
+  assert.ok(ctx.tools.get(key), `${key} is a registered tool`)
+}
+console.log(`claimed keys: ${TOOL_ROW_KEYS.join(', ')}`)
 
 /**
  * A settled root call carrying one metadata object, as the chat layer freezes it.
@@ -114,14 +123,21 @@ console.log('malformed metadata: twelve payloads, all falling back')
 
 // The states a call itself can be in, which no metadata can rescue.
 const goodMeta = metaOf('db_query', { sql: 'SELECT 1' }, queryValue)
+const running = {
+  callId: 'c', name: 'db_query', argsRaw: '{"sql":"SELECT SLEEP(6)"}', turn: 1, step: 1, time: 0, subCalls: [],
+}
 assert.equal(dbCardModel(settledCall(goodMeta, { isError: true })), null, 'a call that failed')
-assert.equal(
-  dbCardModel({ callId: 'c', name: 'db_query', argsRaw: '{}', turn: 1, step: 1, time: 0, subCalls: [] }),
-  null,
-  'a call still running',
-)
+assert.equal(dbCardModel(running), null, 'a call still running')
 assert.equal(dbCardModel(settledCall(goodMeta, { parentCallId: 'parent' })), null, 'a call dispatched inside another')
 console.log('call states: failed, running, and nested all fall back')
+
+// And a running call still says what it is doing. Claiming the key took the
+// shell's row away, so the arguments are the only place the statement appears —
+// a six-second query that shows nothing but its tool name reads as a call with no
+// input at all.
+assert.equal(callText(running), '{"sql":"SELECT SLEEP(6)"}', 'a running call shows the arguments it was given')
+assert.equal(callText(settledCall(undefined)), 'rows', 'a settled call shows its result text')
+console.log('running text: the statement stays visible while the call is in flight')
 
 // The text the generic row shows, so the fallback is never an empty box.
 assert.equal(genericText(settledCall(undefined)), 'rows', 'the generic row shows the result text')
@@ -150,9 +166,26 @@ const many = {
 const manyMeta = metaOf('db_query', { sql: 'SELECT id' }, many)
 assert.equal(manyMeta.truncated, true, 'a card past its bound says it was cut')
 assert.ok(manyMeta.rows.length < 500, 'a card carries fewer rows than the server answered')
-assert.ok(JSON.stringify(manyMeta).length <= 32 * 1024, 'a card stays within the byte bound')
+assert.ok(Buffer.byteLength(JSON.stringify(manyMeta), 'utf8') <= CARD_BYTES, 'a card stays within the byte bound')
 assert.equal(dbCardModel(settledCall(manyMeta)).truncated, true, 'and the client reads that cut back')
-console.log(`bounds: ${String(manyMeta.rows.length)} of 500 rows carried, metadata ${String(JSON.stringify(manyMeta).length)} bytes`)
+
+// The bound is bytes, not UTF-16 code units: a CJK cell costs three bytes per
+// character, so a card whose rows fit by string length can be well over budget —
+// and the session log would then carry every one of those bytes.
+const cjk = '中文测试'.repeat(40)
+const wide = {
+  columns: ['wide_cell', 'id'],
+  rows: Array.from({ length: 200 }, (_, index) => ({ wide_cell: cjk, id: index })),
+  rowCount: 200,
+  truncated: false,
+  elapsedMs: 5,
+}
+const wideMeta = metaOf('db_query', { sql: 'SELECT wide_cell, id' }, wide)
+const wideBytes = Buffer.byteLength(JSON.stringify(wideMeta), 'utf8')
+assert.equal(wideMeta.truncated, true, 'a card of wide CJK cells says it was cut')
+assert.ok(wideMeta.rows.length < 50, 'the byte bound cut it before the row bound did')
+assert.ok(wideBytes <= CARD_BYTES, `a card of CJK text stays within the bound (${String(wideBytes)} bytes)`)
+console.log(`bounds: ${String(manyMeta.rows.length)} of 500 rows, ${String(wideMeta.rows.length)} of 200 wide rows, ${String(wideBytes)} utf8 bytes`)
 
 await ctx.fiber.dispose()
 console.log('card check passed')

@@ -73,8 +73,20 @@ const CARD_ROWS = 50
 /** Items one list card carries, for the same reason. */
 const CARD_ITEMS = 100
 
-/** Serialized bytes one card's body may take; a card past this stops early. */
-const CARD_BYTES = 16 * 1024
+/** Serialized UTF-8 bytes one card may take. The checks bound this same constant. */
+export const CARD_BYTES = 16 * 1024
+
+/**
+ * One value's size as it will be stored, in UTF-8 bytes rather than UTF-16 code
+ * units.
+ *
+ * The session log counts bytes, and `JSON.stringify(...).length` counts code
+ * units: a CJK character is three bytes and an emoji four, so a budget read off
+ * the string length is met by a card that is several times over it.
+ */
+function byteSize(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value), 'utf8')
+}
 
 /** One value as a cell can draw it. */
 function cardCell(value: DbJson | undefined): CardCell {
@@ -95,14 +107,21 @@ function cardRow(columns: readonly string[], row: DbJson): CardCell[] {
  * Bound a table card, and say whether it was cut.
  * @param columns - the columns, in the order the server answered them.
  * @param rows - every row the tool answered with.
+ * @param shell - bytes the card's own fields take, counted against the same bound.
  * @returns the rows to draw, and whether anything was left out.
  */
-function cardRows(columns: readonly string[], rows: readonly DbJson[]): { rows: CardCell[][], truncated: boolean } {
+function cardRows(
+  columns: readonly string[],
+  rows: readonly DbJson[],
+  shell: number,
+): { rows: CardCell[][], truncated: boolean } {
   const kept: CardCell[][] = []
-  let used = 0
+  // The whole card is stored as one value, so a body that fits while its header
+  // does not is still a card over budget.
+  let used = shell
   for (const row of rows.slice(0, CARD_ROWS)) {
     const cells = cardRow(columns, row)
-    const size = JSON.stringify(cells).length
+    const size = byteSize(cells)
     if (used + size > CARD_BYTES) break
     used += size
     kept.push(cells)
@@ -113,13 +132,14 @@ function cardRows(columns: readonly string[], rows: readonly DbJson[]): { rows: 
 /**
  * Bound a list card, and say whether it was cut.
  * @param items - every item the tool answered with.
+ * @param shell - bytes the card's own fields take, counted against the same bound.
  * @returns the items to draw, and whether anything was left out.
  */
-function cardItems(items: readonly CardItem[]): { items: CardItem[], truncated: boolean } {
+function cardItems(items: readonly CardItem[], shell: number): { items: CardItem[], truncated: boolean } {
   const kept: CardItem[] = []
-  let used = 0
+  let used = shell
   for (const item of items.slice(0, CARD_ITEMS)) {
-    const size = JSON.stringify(item).length
+    const size = byteSize(item)
     if (used + size > CARD_BYTES) break
     used += size
     kept.push(item)
@@ -237,9 +257,14 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
           : value.databases.map(row => `${row.name} (${row.charset}/${row.collation})`).join('\n'),
       }],
       presentationMeta: (_args, value) => {
-        const card = cardItems(value.databases.map(row => row.charset.length === 0
-          ? { name: row.name }
-          : { name: row.name, detail: `${row.charset}/${row.collation}` }))
+        const card = cardItems(
+          value.databases.map(row => row.charset.length === 0
+            ? { name: row.name }
+            : { name: row.name, detail: `${row.charset}/${row.collation}` }),
+          // The card's own fields count too; `truncated` is measured at its
+          // longest, so the bound holds whichever way the card ends up.
+          byteSize({ card: 'list', label: 'databases', total: value.databases.length, truncated: true }),
+        )
         return {
           card: 'list',
           label: 'databases',
@@ -302,7 +327,13 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
           )].join('\n'),
       }],
       presentationMeta: (_args, value) => {
-        const card = cardItems(value.tables.map(row => ({ name: row.name, detail: tableDetail(row) })))
+        const card = cardItems(
+          value.tables.map(row => ({ name: row.name, detail: tableDetail(row) })),
+          byteSize({
+            card: 'list', label: 'tables', database: value.database,
+            total: value.tables.length, truncated: true,
+          }),
+        )
         return {
           card: 'list',
           label: 'tables',
@@ -459,7 +490,13 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
         }]
       },
       presentationMeta: (_args, value) => {
-        const card = cardRows(value.columns, value.rows)
+        const card = cardRows(value.columns, value.rows, byteSize({
+          card: 'table',
+          columns: value.columns,
+          rowCount: value.rowCount,
+          truncated: true,
+          elapsedMs: value.elapsedMs,
+        }))
         // Either bound cutting the card is the fact a reader needs, so the two
         // are one flag here: the tool's own row cap, and the card's own limits.
         return {
@@ -516,7 +553,14 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
           text: `${value.database}.${value.table}: ${JSON.stringify(value.rows)}`,
         }],
         presentationMeta: (_args, value) => {
-          const card = cardRows(value.columns, value.rows)
+          const card = cardRows(value.columns, value.rows, byteSize({
+            card: 'table',
+            database: value.database,
+            table: value.table,
+            columns: value.columns,
+            rowCount: value.rows.length,
+            truncated: true,
+          }))
           return {
             card: 'table',
             database: value.database,

@@ -17,6 +17,7 @@ import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools/src/json-schema.
 import * as mysqlReadOnly from '../src/index.ts'
 import { dialectCatalog } from '../src/index.ts'
 import { DatabaseAccess } from '../src/connection.ts'
+import { CARD_BYTES } from '../src/tools.ts'
 import * as mysqlDialect from '../dialects/mysql/src/index.ts'
 import { MYSQL_DIALECT } from '../dialects/mysql/src/index.ts'
 
@@ -44,8 +45,7 @@ function assertOutput(ctx, name, value) {
   assert.deepEqual(violations, [], `${name} returns what its output schema declares`)
 }
 
-/** Bytes one card's metadata may take once serialized into the session log. */
-const CARD_META_BYTES = 32 * 1024
+
 
 /**
  * Assert one tool's card metadata is shaped the way the client reads it.
@@ -86,7 +86,12 @@ function assertMeta(ctx, name, args, value, card) {
       `${name}'s item details are text`)
     assert.ok(Number.isInteger(meta.total), `${name}'s metadata carries a total`)
   }
-  assert.ok(JSON.stringify(meta).length <= CARD_META_BYTES, `${name}'s metadata stays within its bound`)
+  // Measured the way the Host measures it, and against the Host's own constant:
+  // code units would pass a card that is several times over the byte budget.
+  assert.ok(
+    Buffer.byteLength(JSON.stringify(meta), 'utf8') <= CARD_BYTES,
+    `${name}'s metadata stays within the byte bound`,
+  )
   return meta
 }
 
