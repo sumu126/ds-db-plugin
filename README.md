@@ -362,8 +362,9 @@ pnpm dsh web --patch <插件目录>/.dev/cordis.yml
 pnpm install --frozen-lockfile        # lockfile 必须与 package.json 一致
 pnpm run typecheck && pnpm test
 pnpm run verify:host && pnpm run verify:settings && pnpm run verify:loader && pnpm run verify:cards
-pnpm pack                             # 根包必须 pnpm：只有它会改写 workspace:
-npm --prefix dialects/mysql pack      # 方言包 npm 也行：它的 workspace: 在 devDependencies 里，消费者不装 devDeps
+pnpm pack --pack-destination .        # 根包必须 pnpm：只有它会改写 workspace:
+npm --prefix dialects/mysql pack --pack-destination .
+# 落点显式给出，下一行的相对路径才是确定的（两行都支持 --pack-destination）
 dsh plugin --profile demo add ./dsh-dialect-mysql-0.1.0.tgz
 dsh plugin --profile demo add ./dsh-ds-db-0.1.0.tgz
 dsh --profile demo --dump-config | grep -E 'dialect-mysql|ds-db'   # 顺序：方言行在前
@@ -381,6 +382,11 @@ pnpm install --frozen-lockfile                                             # 一
 ```
 
 后两条与 importer 数量无关，所以它们能和第一条交叉验证——**单一判据容易被同源的东西喂饱**，这正是这几轮反复踩的那个坑。
+
+两条从**产物反推**的习惯（方言包的三处问题——无 `files` 白名单、缺 `LICENSE`、缺 `README`——都是这么发现的）：
+
+- **打包后先 `tar -tzf` 看清单，再看 npm 页面。** `README` 是唯一 `files` 白名单管不住的东西（npm 总是包含它），所以"加了白名单就干净了"是错的。
+- **`pack` 必须排在所有会进包的改动之后。** 「`tag` 在最后」只防 tag 与产物漂移，不防"pack 之后又改了包内文件"——曾经出现过 pack 在 19:00、19:08 又提交了 README 的情况，那份快照里装的就是旧清单。
 
 第一条不是形式主义：这个仓库的 `pnpm-lock.yaml` **曾经在主分支上腐烂了十几个提交**——它的根 importer 还停在"依赖只有 mysql2"的形态，`dialects/mysql` 这个 workspace 成员从未出现在里面。原因是本仓的 pnpm 路径长期没被走通（一直在用 `npm install --legacy-peer-deps` 绕），于是同时掩盖了两件事：pnpm 会自动安装缺失的 peer（而本插件的 peer 全是宿主提供、未发布的包），以及 lockfile 早已过期。两笔账在依赖改用只有 pnpm 认的 `workspace:` 那一刻同时到期。所以：**lockfile 要么被 gate，要么删掉——一个说谎的 lockfile 比没有更糟**。这里选 gate，就是这第一条。
 
