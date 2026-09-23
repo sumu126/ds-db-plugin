@@ -362,8 +362,25 @@ pnpm dsh web --patch <插件目录>/.dev/cordis.yml
 pnpm install --frozen-lockfile        # lockfile 必须与 package.json 一致
 pnpm run typecheck && pnpm test
 pnpm run verify:host && pnpm run verify:settings && pnpm run verify:loader && pnpm run verify:cards
-pnpm pack                             # prepack 会 build；只有 pnpm 会把 workspace: 改写成版本号
+pnpm pack                             # 根包必须 pnpm：只有它会改写 workspace:
+npm --prefix dialects/mysql pack      # 方言包 npm 也行：它的 workspace: 在 devDependencies 里，消费者不装 devDeps
+dsh plugin --profile demo add ./dsh-dialect-mysql-0.1.0.tgz
+dsh plugin --profile demo add ./dsh-ds-db-0.1.0.tgz
+dsh --profile demo --dump-config | grep -E 'dialect-mysql|ds-db'   # 顺序：方言行在前
+dsh --profile demo web                # 起得来、无 FAILED fiber、模型侧能看到 db_connections
+# 顺手在装出来的那一版上跑 db:live / card:live —— 别人替代不了这条验据
+git tag v0.1.0                        # 只有上面全绿才打
 ```
+
+`--frozen-lockfile` 只说"此刻一致"，不说"真的重生成了"。三条判据一起看才分得清：
+
+```sh
+Select-String -Path pnpm-lock.yaml -Pattern '^  (\.|dialects/mysql):'      # 两个 importer
+Select-String -Path pnpm-lock.yaml -Pattern 'clsx|autoInstallPeers'         # clsx 出现；autoInstallPeers 翻成 false
+pnpm install --frozen-lockfile                                             # 一致
+```
+
+后两条与 importer 数量无关，所以它们能和第一条交叉验证——**单一判据容易被同源的东西喂饱**，这正是这几轮反复踩的那个坑。
 
 第一条不是形式主义：这个仓库的 `pnpm-lock.yaml` **曾经在主分支上腐烂了十几个提交**——它的根 importer 还停在"依赖只有 mysql2"的形态，`dialects/mysql` 这个 workspace 成员从未出现在里面。原因是本仓的 pnpm 路径长期没被走通（一直在用 `npm install --legacy-peer-deps` 绕），于是同时掩盖了两件事：pnpm 会自动安装缺失的 peer（而本插件的 peer 全是宿主提供、未发布的包），以及 lockfile 早已过期。两笔账在依赖改用只有 pnpm 认的 `workspace:` 那一刻同时到期。所以：**lockfile 要么被 gate，要么删掉——一个说谎的 lockfile 比没有更糟**。这里选 gate，就是这第一条。
 

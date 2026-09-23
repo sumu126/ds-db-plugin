@@ -4,6 +4,10 @@
   "description": "MySQL dialect for dsh-ds-db: registers the `mysql` type so the plugin's read-only tools, settings page, and type chooser work against MySQL.",
   "type": "module",
   "main": "lib/index.js",
+  "files": [
+    "lib",
+    "src"
+  ],
   "license": "MIT",
   "scripts": {
     "build": "node ../../scripts/build-dialects.mjs .",
