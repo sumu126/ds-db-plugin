@@ -58,6 +58,15 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
+/* The full-result toggle sits under the card it belongs to, aligned to its left
+   edge rather than stretched across it. */
+.recovery {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
 .scroll {
   max-height: 320px;
   overflow: auto;

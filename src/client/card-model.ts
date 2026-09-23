@@ -46,6 +46,14 @@ export interface TableCard {
   rowCount: number
   /** Whether what the card shows is not all of it. */
   truncated: boolean
+  /**
+   * The call's whole text, kept when the card was cut.
+   *
+   * The card trims rows and cells to keep a turn readable; the result the model
+   * read is still the text it was given, so a reader can open that instead of
+   * rerunning the query. Absent when nothing was cut.
+   */
+  recovery?: string
   /** How long the server took, when the tool measured it. */
   elapsedMs?: number
 }
@@ -66,6 +74,8 @@ export interface ListCard {
   total: number
   /** Whether what the card shows is not all of it. */
   truncated: boolean
+  /** The call's whole text, kept when the card was cut; see {@link TableCard.recovery}. */
+  recovery?: string
 }
 
 /** What one settled call draws: a card, or nothing when the generic row owns it. */
@@ -119,7 +129,11 @@ function cellsOf(value: unknown): CardCell[][] | null {
 }
 
 /** The table a `card: 'table'` metadata object describes, or nothing. */
-function tableCard(meta: Record<string, unknown>, truncated: boolean): TableCard | null {
+function tableCard(
+  meta: Record<string, unknown>,
+  truncated: boolean,
+  recovery: string | undefined,
+): TableCard | null {
   const columns = columnsOf(meta.columns)
   if (columns === null) return null
   const rows = cellsOf(meta.rows)
@@ -142,6 +156,7 @@ function tableCard(meta: Record<string, unknown>, truncated: boolean): TableCard
     rows,
     rowCount,
     truncated,
+    ...recovery === undefined ? {} : { recovery },
     ...database === undefined ? {} : { database },
     ...table === undefined ? {} : { table },
     ...elapsedMs === null ? {} : { elapsedMs },
@@ -149,7 +164,11 @@ function tableCard(meta: Record<string, unknown>, truncated: boolean): TableCard
 }
 
 /** The listing a `card: 'list'` metadata object describes, or nothing. */
-function listCard(meta: Record<string, unknown>, truncated: boolean): ListCard | null {
+function listCard(
+  meta: Record<string, unknown>,
+  truncated: boolean,
+  recovery: string | undefined,
+): ListCard | null {
   if (meta.label !== 'databases' && meta.label !== 'tables') return null
   const total = countOf(meta.total)
   if (total === null) return null
@@ -170,6 +189,7 @@ function listCard(meta: Record<string, unknown>, truncated: boolean): ListCard |
     items,
     total,
     truncated,
+    ...recovery === undefined ? {} : { recovery },
     ...database === undefined ? {} : { database },
   }
 }
@@ -188,8 +208,11 @@ export function dbCardModel(block: ToolCallBlock): DbCard | null {
   if (!isRecord(block.meta)) return null
   const truncated = block.meta.truncated
   if (typeof truncated !== 'boolean') return null
-  if (block.meta.card === 'table') return tableCard(block.meta, truncated)
-  if (block.meta.card === 'list') return listCard(block.meta, truncated)
+  // A card that was cut keeps the call's own text beside it: that text is the
+  // whole rendering the model read, so opening it beats rerunning the query.
+  const recovery = truncated ? genericText(block) : undefined
+  if (block.meta.card === 'table') return tableCard(block.meta, truncated, recovery)
+  if (block.meta.card === 'list') return listCard(block.meta, truncated, recovery)
   return null
 }
 

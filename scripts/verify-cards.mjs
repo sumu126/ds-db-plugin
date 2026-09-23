@@ -190,7 +190,20 @@ const manyMeta = metaOf('db_query', { sql: 'SELECT id' }, many)
 assert.equal(manyMeta.truncated, true, 'a card past its bound says it was cut')
 assert.ok(manyMeta.rows.length < 500, 'a card carries fewer rows than the server answered')
 assert.ok(Buffer.byteLength(JSON.stringify(manyMeta), 'utf8') <= CARD_BYTES, 'a card stays within the byte bound')
-assert.equal(dbCardModel(settledCall(manyMeta)).truncated, true, 'and the client reads that cut back')
+
+// A card that was cut keeps the call's own text beside it: the card trims for
+// display, while the whole result is still the text the model read — so it opens
+// in place rather than being lost to the reader or fetched again.
+const manyCard = dbCardModel(settledCall(manyMeta))
+assert.equal(manyCard.truncated, true, 'the client reads the cut back')
+assert.equal(manyCard.recovery, 'rows', 'a cut card carries the whole result text')
+assert.equal(queryCard.recovery, undefined, 'a card that was not cut carries none')
+assert.equal(
+  dbCardModel(settledCall(manyMeta, { content: [] })).recovery,
+  '',
+  'a cut card with no result text carries an empty one, which the view does not offer',
+)
+console.log('recovery: a cut card carries the full text, an intact one carries none')
 
 // The bound is bytes, not UTF-16 code units: a CJK cell costs three bytes per
 // character, so a card whose rows fit by string length can be well over budget —

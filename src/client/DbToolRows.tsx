@@ -10,6 +10,8 @@
  * @module dsh-ds-db/src/client/DbToolRows
  */
 
+import { useState } from 'react'
+import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: pulls the renderer's Context merge (ctx.slots).
@@ -40,6 +42,24 @@ function FallbackRow({ toolName, block }: { toolName: string, block: ToolCallBlo
         <span className={styles.title}>{toolName}</span>
       </div>
       {text.length === 0 ? null : <pre className={styles.plain}>{text}</pre>}
+    </div>
+  )
+}
+
+/**
+ * The call's whole text, opened in place.
+ *
+ * A card trims rows and cells to keep a turn readable, and the result the model
+ * read is still the text it was given — so it opens here, under the card, rather
+ * than in a layer that would need its own positioning and focus handling.
+ */
+function Recovery({ text, t }: { text: string | undefined, t: Translate }) {
+  const [open, setOpen] = useState(false)
+  if (text === undefined || text.length === 0) return null
+  return (
+    <div className={styles.recovery}>
+      <Button size="sm" onClick={() => { setOpen(!open) }}>{t(open ? 'hideFull' : 'showFull')}</Button>
+      {open ? <pre className={styles.plain}>{text}</pre> : null}
     </div>
   )
 }
@@ -96,6 +116,7 @@ function TableView({ card, t }: { card: TableCard, t: Translate }) {
             </table>
           </div>
         )}
+      <Recovery text={card.recovery} t={t} />
     </div>
   )
 }
@@ -124,6 +145,7 @@ function ListView({ card, t }: { card: ListCard, t: Translate }) {
             ))}
           </ul>
         )}
+      <Recovery text={card.recovery} t={t} />
     </div>
   )
 }
