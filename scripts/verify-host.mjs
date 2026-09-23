@@ -13,12 +13,27 @@ import assert from 'node:assert/strict'
 import { Context } from '@deepseek-ai/cordis'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
+import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools/src/json-schema.ts'
 import * as mysqlReadOnly from '../src/index.ts'
 import { dialectCatalog } from '../src/index.ts'
 import * as mysqlDialect from '../dialects/mysql/src/index.ts'
 import { MYSQL_DIALECT } from '../dialects/mysql/src/index.ts'
 
 const TOOL_NAMES = ['db_databases', 'db_tables', 'db_describe', 'db_query']
+
+/**
+ * Assert one tool's result satisfies the output schema it declares.
+ *
+ * A real call validates this in the host, so a mismatch between a schema and
+ * what a tool returns is a failure only a running deployment would show. This
+ * check moves that failure here, where the tool that caused it is named.
+ */
+function assertOutput(ctx, name, value) {
+  const tool = ctx.tools.get(name)
+  assert.ok(tool, `${name} is registered`)
+  const violations = validateJsonSchemaValue(tool.output.schema, value, 'value')
+  assert.deepEqual(violations, [], `${name} returns what its output schema declares`)
+}
 
 /**
  * The descriptions this plugin shipped before the dialect seam existed. The
@@ -158,8 +173,15 @@ function standInDialect(label, version) {
     tables: () => query('SELECT tablename AS name, \'BASE TABLE\' AS type FROM pg_tables', row => ({
       name: String(row.name), type: String(row.type), engine: null, estimatedRows: null, comment: '',
     })),
-    columns: () => query('SELECT * FROM information_schema.columns', () => ({})),
-    indexes: () => query('SELECT * FROM pg_indexes', () => ({})),
+    // The projections have to be real: the plugin's own output schema validates
+    // what a tool returns, so a dialect that reports half-shaped rows fails the
+    // call in a deployment, not here.
+    columns: () => query('SELECT * FROM information_schema.columns', () => ({
+      name: 'id', type: 'integer', nullable: false, default: null, key: '', extra: '', comment: '',
+    })),
+    indexes: () => query('SELECT * FROM pg_indexes', () => ({
+      name: 'events_pkey', unique: true, type: 'BTREE', columnName: 'id',
+    })),
     createStatement: () => query('SELECT pg_get_tabledef()', () => ''),
     version: () => query('SELECT version() AS version', row => String(row.version ?? '')),
   }
@@ -173,15 +195,18 @@ assert.deepEqual(listed, {
   database: 'app',
   tables: [{ name: 'events', type: 'BASE TABLE', engine: null, estimatedRows: null, comment: '' }],
 })
+assertOutput(second, 'db_tables', listed)
 console.log(`second dialect ran the tools: ${JSON.stringify(listed)}`)
 
 // Its own statement, projection, and syntax win over the ones this plugin was
 // registered with: the bound below is spelled the second dialect's way.
 const databases = await second.tools.get('db_databases').execute({}, undefined)
 assert.deepEqual(databases, { databases: [{ name: 'app', charset: '', collation: '' }] })
+assertOutput(second, 'db_databases', databases)
 const bounded = await second.tools.get('db_query').execute({ sql: 'SELECT 1' }, undefined)
 assert.match(seen.sql, /FETCH FIRST 201 ROWS ONLY/, 'the second dialect bounded the statement')
 assert.equal(bounded.rowCount, 0)
+assertOutput(second, 'db_query', bounded)
 console.log(`second dialect bounded a query: ${JSON.stringify(seen.sql)}`)
 
 // A dialect that cannot produce a create statement omits the field: the seam
@@ -189,6 +214,7 @@ console.log(`second dialect bounded a query: ${JSON.stringify(seen.sql)}`)
 const described = await second.tools.get('db_describe').execute({ database: 'app', table: 'events' }, undefined)
 assert.equal(described.createStatement, undefined, 'a dialect without createStatement omits it')
 assert.equal(described.table, 'events')
+assertOutput(second, 'db_describe', described)
 console.log('capability degradation: db_describe omitted createStatement')
 
 // The page's type chooser reads the registered dialects plus what a deployment
@@ -251,6 +277,7 @@ assert.deepEqual(
   Object.keys(savedConnections.connections[0]).sort(),
   ['active', 'database', 'dialect', 'host', 'id', 'name', 'port'],
 )
+assertOutput(third, 'db_connections', savedConnections)
 console.log(`connections: ${savedConnections.active} is the default of ${savedConnections.connections.length}`)
 
 // An undeclared capability is refused at registration, not silently accepted.

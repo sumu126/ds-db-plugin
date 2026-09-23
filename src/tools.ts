@@ -452,6 +452,7 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
               type: 'object',
               additionalProperties: false,
               properties: {
+                id: { type: 'string', required: true, description: 'Id to address this connection by, which is what an ambiguous name points at.' },
                 name: { type: 'string', required: true },
                 dialect: { type: 'string', required: true, description: 'Registered database type; empty means the deployment default.' },
                 host: { type: 'string', required: true },
