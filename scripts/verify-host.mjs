@@ -280,6 +280,17 @@ assert.deepEqual(
 assertOutput(third, 'db_connections', savedConnections)
 console.log(`connections: ${savedConnections.active} is the default of ${savedConnections.connections.length}`)
 
+// A composition layer that names no port leaves it to the dialect, and the
+// listing reports the port the connection really reaches rather than the 0 the
+// document carries.
+const unsetPort = await mount({ host: '127.0.0.1', user: 'nobody', database: '' })
+const listedUnset = await unsetPort.tools.get('db_connections').execute({}, undefined)
+assertOutput(unsetPort, 'db_connections', listedUnset)
+assert.equal(listedUnset.connections[0].port, 3306, 'an unset port reports the dialect default')
+assert.equal(listedUnset.connections[0].host, '127.0.0.1')
+console.log(`unset port: reported as ${String(listedUnset.connections[0].port)}`)
+await unsetPort.fiber.dispose()
+
 // An undeclared capability is refused at registration, not silently accepted.
 assert.throws(
   () => third.databaseDialects.register({ ...MYSQL_DIALECT, name: 'bogus', capabilities: new Set(['teleport']) }),

@@ -8,7 +8,47 @@
  * @module dsh-ds-db/src/connections
  */
 
-import type { ConnectionProfile, DatabaseSettings } from './contract.ts'
+import { UNSET_PORT, type ConnectionDefaults, type ConnectionProfile, type DatabaseSettings } from './contract.ts'
+
+/** What one saved connection really reaches, once its dialect's defaults apply. */
+export interface EffectiveConnection {
+  /** Server host name or address. */
+  host: string
+  /** Server TCP port, always a real port. */
+  port: number
+  /** Account to connect as. */
+  user: string
+  /** Default database, empty when every call names one. */
+  database: string
+  /** Credential reference holding the account password. */
+  passwordEnv: string
+}
+
+/**
+ * The values a saved connection really uses.
+ *
+ * A field the profile leaves empty falls back to what its dialect declares,
+ * exactly as a call resolves it — so a page and a tool never disagree about
+ * where a connection points. `port` is always a real port here: `0` means "the
+ * dialect's", and a dialect that declares none is a refusal at call time.
+ * @param profile - the saved connection.
+ * @param defaults - what the profile's dialect declared, if anything.
+ * @returns the values to show and to connect with.
+ */
+export function effectiveConnection(
+  profile: ConnectionProfile,
+  defaults: ConnectionDefaults | undefined,
+): EffectiveConnection {
+  return {
+    host: profile.host.trim().length > 0 ? profile.host.trim() : defaults?.host ?? '',
+    port: profile.port !== UNSET_PORT ? profile.port : defaults?.port ?? UNSET_PORT,
+    user: profile.user.trim().length > 0 ? profile.user.trim() : String(defaults?.user ?? ''),
+    database: profile.database.trim().length > 0 ? profile.database : defaults?.database ?? '',
+    passwordEnv: profile.passwordEnv.trim().length > 0
+      ? profile.passwordEnv
+      : defaults?.passwordEnv ?? profile.passwordEnv,
+  }
+}
 
 /** The fields of a saved connection a model may see. */
 export interface ConnectionSummary {
@@ -20,7 +60,7 @@ export interface ConnectionSummary {
   dialect: string
   /** Server host name or address. */
   host: string
-  /** Server TCP port, or 0 when the dialect supplies it. */
+  /** Server TCP port the connection really uses. */
   port: number
   /** Default database, empty when every call names one. */
   database: string
@@ -75,18 +115,26 @@ export function resolveProfile(settings: DatabaseSettings, requested: string | u
 }
 
 /**
- * Every saved connection as a model may see it.
+ * Every saved connection as a model may see it, reporting where each one
+ * really reaches rather than the raw document.
  * @param settings - the current settings section.
+ * @param defaultsFor - what each connection's dialect declared, read per profile.
  * @returns one summary per saved connection, in document order.
  */
-export function connectionSummaries(settings: DatabaseSettings): ConnectionSummary[] {
-  return settings.connections.map(profile => ({
-    id: profile.id,
-    name: profile.name,
-    dialect: profile.dialect,
-    host: profile.host,
-    port: profile.port,
-    database: profile.database,
-    active: profile.id === settings.activeId,
-  }))
+export function connectionSummaries(
+  settings: DatabaseSettings,
+  defaultsFor: (profile: ConnectionProfile) => ConnectionDefaults | undefined,
+): ConnectionSummary[] {
+  return settings.connections.map((profile) => {
+    const effective = effectiveConnection(profile, defaultsFor(profile))
+    return {
+      id: profile.id,
+      name: profile.name,
+      dialect: profile.dialect,
+      host: effective.host,
+      port: effective.port,
+      database: effective.database,
+      active: profile.id === settings.activeId,
+    }
+  })
 }

@@ -95,11 +95,13 @@ function Card(props: {
         </span>
       </div>
       <div className={styles.cardLines}>
+        {/* Where the connection reaches, not the raw document: an unset port
+            shows the dialect's own. */}
         <span className={styles.cardLine}>
-          {`${card.profile.host}:${String(card.profile.port)} · ${card.profile.user}`}
+          {`${card.resolved.host}:${String(card.resolved.port)} · ${card.resolved.user}`}
         </span>
-        <span className={`${styles.cardLine} ${card.profile.database.length === 0 ? styles.cardLineMuted : ''}`}>
-          {card.profile.database.length === 0 ? t('noDatabase') : card.profile.database}
+        <span className={`${styles.cardLine} ${card.resolved.database.length === 0 ? styles.cardLineMuted : ''}`}>
+          {card.resolved.database.length === 0 ? t('noDatabase') : card.resolved.database}
         </span>
         <span className={`${styles.cardLine} ${card.passwordConfigured ? styles.probeOk : styles.cardLineMuted}`}>
           {card.passwordConfigured ? t('passwordSet') : t('passwordUnset')}

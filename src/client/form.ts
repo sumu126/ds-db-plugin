@@ -14,6 +14,23 @@ import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client
 import type { SettingsPathOpView } from '@deepseek-ai/dsh-api-remotes/client'
 import type { SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client'
 import { DEFAULT_PASSWORD_REF, type ConnectionProfile, type DatabaseSettings, type DialectCatalog, type DialectDescriptor } from '../contract.ts'
+import { effectiveConnection, type EffectiveConnection } from '../connections.ts'
+
+/**
+ * The descriptor of one saved connection's dialect, as the catalog carries it.
+ *
+ * A connection that names no dialect addresses the deployment's first
+ * registered one, which is also how the Host resolves it.
+ * @param catalog - the loaded catalog, when the Host answered.
+ * @param dialect - the connection's dialect key; empty means the first one.
+ * @returns the descriptor, or undefined while the catalog is unknown.
+ */
+function descriptorOf(catalog: DialectCatalog | undefined, dialect: string): DialectDescriptor | undefined {
+  const key = dialect.trim()
+  return key.length === 0
+    ? catalog?.installed[0]
+    : catalog?.installed.find(entry => entry.name === key)
+}
 
 /** One editable field of the connection dialog, in form order. */
 export type DbFormField
@@ -36,6 +53,8 @@ export type DbProbe =
 /** One saved connection as a card renders it. */
 export interface ConnectionCard {
   profile: ConnectionProfile
+  /** Where this connection really reaches, once its dialect's defaults apply. */
+  resolved: EffectiveConnection
   /** Whether the tools currently address this connection. */
   active: boolean
   /** Whether the Host reports a stored value for this profile's reference. */
@@ -189,21 +208,6 @@ export function dialogProfile(dialog: DbDialog): ConnectionProfile | undefined {
   }
 }
 
-/** Draft text for one field, rendered from a saved profile. */
-function fieldText(profile: ConnectionProfile, field: DbFormField): string {
-  switch (field) {
-    case 'name': return profile.name
-    case 'host': return profile.host
-    case 'port': return String(profile.port)
-    case 'user': return profile.user
-    case 'database': return profile.database
-    case 'passwordEnv': return profile.passwordEnv
-    case 'connectTimeoutMs': return String(profile.connectTimeoutMs)
-    case 'queryTimeoutMs': return String(profile.queryTimeoutMs)
-    case 'maxRows': return String(profile.maxRows)
-  }
-}
-
 /** A fresh dialog id for a connection the page is about to save. */
 function freshId(): string {
   const uuid = globalThis.crypto?.randomUUID?.()
@@ -243,9 +247,23 @@ function blankFields(descriptor: DialectDescriptor | undefined, dialect: string)
  * @returns the dialog editing that profile.
  */
 export function editDraftFor(profile: ConnectionProfile, catalog?: DialectCatalog): DbDialog {
-  const fields = {} as Record<DbFormField, string>
-  for (const field of DB_FORM_FIELDS) fields[field] = fieldText(profile, field)
-  const configFields = catalog?.installed.find(entry => entry.name === profile.dialect)?.configFields ?? []
+  const descriptor = descriptorOf(catalog, profile.dialect)
+  const effective = effectiveConnection(profile, descriptor?.connectionDefaults)
+  // The form opens on where the connection really reaches: a field left empty
+  // is its dialect's default, and opening on the raw document would show a port
+  // of 0 that neither the user nor the save could make sense of.
+  const fields: Record<DbFormField, string> = {
+    name: profile.name,
+    host: effective.host,
+    port: String(effective.port),
+    user: effective.user,
+    database: effective.database,
+    passwordEnv: effective.passwordEnv,
+    connectTimeoutMs: String(profile.connectTimeoutMs),
+    queryTimeoutMs: String(profile.queryTimeoutMs),
+    maxRows: String(profile.maxRows),
+  }
+  const configFields = descriptor?.configFields ?? []
   const extra: Record<string, string | number> = {}
   for (const field of configFields) extra[field.key] = profile.extra[field.key] ?? field.default
   // A saved value the catalog no longer describes still round-trips: dropping
@@ -370,6 +388,10 @@ export class DatabaseSettingsController {
       catalog: this.catalog,
       cards: connections.map(profile => ({
         profile,
+        // A saved connection shows where it reaches, not the raw document: a
+        // field it leaves empty is the dialect's default, and a page that
+        // printed the document would show a port of 0.
+        resolved: effectiveConnection(profile, descriptorOf(this.catalog, profile.dialect)?.connectionDefaults),
         active: profile.id === (value?.activeId ?? ''),
         passwordConfigured: this.credentials.get(profile.passwordEnv)?.configured ?? false,
         probe: this.probes.get(profile.id) ?? { status: 'idle' },

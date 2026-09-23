@@ -17,7 +17,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { ConnectionProfile, DatabaseSettings } from './contract.ts'
+import type { ConnectionDefaults, ConnectionProfile, DatabaseSettings } from './contract.ts'
 import { connectionSummaries, resolveProfile } from './connections.ts'
 import type { DatabaseAccess } from './connection.ts'
 import type { DatabaseDialect, DialectCapability, DialectFacts, DialectIndexRow } from './dialect.ts'
@@ -456,7 +456,7 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
                 name: { type: 'string', required: true },
                 dialect: { type: 'string', required: true, description: 'Registered database type; empty means the deployment default.' },
                 host: { type: 'string', required: true },
-                port: { type: 'integer', required: true, description: '0 when the type supplies its own default.' },
+                port: { type: 'integer', required: true, description: 'TCP port this connection really uses.' },
                 database: { type: 'string', required: true, description: 'Default database, empty when every call names one.' },
                 active: { type: 'boolean', required: true },
               },
@@ -481,12 +481,21 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
     async execute() {
       const section = settings()
       // Listing what is saved must not fail when nothing is: the empty answer is
-      // exactly the one a model needs to ask the user for a connection.
+      // exactly the one a model needs to ask the user for a connection. A
+      // dialect that has not loaded is no reason to fail either — the listing
+      // then reports the document's own values.
       const active = section.connections.find(profile => profile.id === section.activeId)
         ?? section.connections[0]
+      const defaultsFor = (profile: ConnectionProfile): ConnectionDefaults | undefined => {
+        try {
+          return dialectFor(profile).connectionDefaults
+        } catch {
+          return undefined
+        }
+      }
       return {
         active: active?.name ?? '',
-        connections: connectionSummaries(section),
+        connections: connectionSummaries(section, defaultsFor),
       }
     },
   }))
