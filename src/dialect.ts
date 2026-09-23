@@ -105,9 +105,15 @@ export interface DialectStatement {
   /**
    * The call's cancellation signal, when the caller has one.
    *
-   * A dialect cancels as far as its driver allows: a driver that takes an
-   * `AbortSignal` forwards it, and one that does not ends the session instead —
-   * the runner then drops that session so the next call opens a fresh one.
+   * What a driver can do about it differs more than the word "cancel" suggests.
+   * One that takes an `AbortSignal` stops the work itself. One that does not
+   * cannot: mysql2's promise pool has no `destroy()`, only `end()`, which queues
+   * a `COM_QUIT` **behind the statement already running** — so the server runs
+   * that statement to completion, and the session is unusable afterwards.
+   *
+   * A dialect that retires its session rather than interrupting the statement
+   * says so through {@link DialectSession.usable}; the runner then evicts that
+   * session whether the call came back with an error or with rows.
    */
   readonly signal?: AbortSignal
 }
@@ -190,6 +196,17 @@ export interface DialectSession {
   run(statement: DialectStatement): Promise<{ rows: unknown[], columns: string[] }>
   /** Release the session's resources. The runner contains any failure here. */
   close(): Promise<void>
+  /**
+   * Whether this session is still usable, asked after a call finishes.
+   *
+   * A dialect that cannot interrupt a statement retires the session to cancel
+   * one, and a retired session fails every later call with something as
+   * unhelpful as "Pool is closed". Declaring it here lets the runner evict the
+   * session, so the next call opens a fresh one instead of failing until the
+   * plugin is reloaded. Optional: a session with nothing to report is taken to
+   * be usable.
+   */
+  usable?(): boolean
 }
 
 /**

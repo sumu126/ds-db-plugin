@@ -122,8 +122,8 @@ class MysqlSession implements DialectSession {
    */
   constructor(private readonly pool: Pool, private readonly queryTimeoutMs: number) {}
 
-  /** Whether the pool has been ended, so it is ended exactly once. */
-  private ended = false
+  /** The pool's end while it runs, so every caller waits for the same one. */
+  private ending?: Promise<void>
 
   /**
    * Run one statement on the pool.
@@ -157,19 +157,24 @@ class MysqlSession implements DialectSession {
     await this.end()
   }
 
+  /** Whether the pool is still open; a pool that is ending serves no more statements. */
+  usable(): boolean {
+    return this.ending === undefined
+  }
+
   /**
-   * End the pool once.
+   * End the pool once, sharing the one in flight.
    *
    * A cancelled statement ends the pool to interrupt it, and the runner then
-   * drops that session and asks it to close — the second call must not be a
-   * second `end()` on a pool that is already gone.
+   * asks that session to close. A caller must wait for the pool to be closed
+   * rather than be told the task was already someone else's: `close()` resolving
+   * has to mean the pool is gone.
    */
-  private async end(): Promise<void> {
-    if (this.ended) return
-    this.ended = true
-    await this.pool.end().catch(() => {
+  private end(): Promise<void> {
+    this.ending ??= this.pool.end().catch(() => {
       // Ending an already-broken pool is the outcome this wanted anyway.
     })
+    return this.ending
   }
 }
 

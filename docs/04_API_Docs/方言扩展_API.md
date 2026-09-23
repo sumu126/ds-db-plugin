@@ -87,8 +87,24 @@ quoteIdentifier(name: string): string
 ```
 
 - `open` 返回的 `DialectSession` 需实现 `run(statement)`（返回 `{ rows, columns }`）与 `close()`
+- 可选 `usable?(): boolean`：一次调用结束后由运行器询问「这个会话还能用吗」；不实现则视为可用
 - `applyRowLimit` 必须保证「忘记写上限也不会把整表灌进模型上下文」：MySQL 追加 `LIMIT n+1`，PG 用 `FETCH FIRST n+1`
-- 连接身份变化或插件卸载时，会话运行器会调用 `close()`；`close()` 的失败由运行器兜住，不得阻塞卸载
+- 连接身份变化或插件卸载时，会话运行器会调用 `close()`；`close()` 的失败由运行器兜住，不得阻塞卸载。`close()` 应当幂等——取消与淘汰可能都来关它
+
+**取消语义：能中断就中断，不能就退役并如实声明**
+
+`DialectStatement.signal` 由工具层透传，方言按自己驱动的能力处理，两种结果差别很大：
+
+| 驱动能力 | 做法 | 结果 |
+| --- | --- | --- |
+| 接受 `AbortSignal` | 转发给驱动 | 语句被中断，调用以取消失败，会话仍可用 |
+| 只能退役会话 | 结束池 / 断开连接 | **服务端那条语句会跑完**；调用可能以取消失败，也可能返回已取回的行；会话随后不可用 |
+
+第二种正是 MySQL 的形状：mysql2 的 Promise pool 没有 `destroy()`、只有 `end()`，而 `end()` 把 `COM_QUIT` 排在正在执行的语句**之后**。因此：
+
+- 用第二种做法就**必须**实现 `usable()`（不再可用即返回 `false`）。否则运行器不知道该淘汰它，那条连接会在本插件重载前**每一次调用都失败**，报错只有驱动的 "pool is closed"，没有任何线索指向真因
+- 运行器在**成功路径**与失败路径都会淘汰：被取消过、或 `usable()` 为 `false` 的会话一律丢弃，下一次调用重建
+- 想真正中断，方言要自己持有单条连接（`pool.getConnection()` → `conn.query()` → abort 时 `conn.destroy()`），而不是用池的高层 API
 
 ### 2.4 元数据查询
 
@@ -168,7 +184,8 @@ configFields: [{ key: 'serviceName', kind: 'text', default: 'ORCL', required: tr
 - [ ] `applyRowLimit` 对「无上限语句」生效
 - [ ] `quoteIdentifier` 能挡住带引号字符的标识符
 - [ ] 每条元数据查询都给出正确的 `project`
-- [ ] `close()` 不抛出阻塞卸载的异常
-- [ ] `capabilities` 如实声明 **[M2]**
+- [ ] `close()` 不抛出阻塞卸载的异常，且可被重复调用
+- [ ] 取消靠「退役会话」的话，实现了 `usable()` 并在退役后返回 `false`
+- [ ] `capabilities` 如实声明
 - [ ] `peerDependencies` 声明 `dsh-ds-db`
 - [ ] 在打包版 dsh 上 `dsh plugin add` 实测通过（不是只在源码态跑通）

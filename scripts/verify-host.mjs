@@ -148,6 +148,21 @@ const seen = { sql: '' }
 function standInDialect(label, version) {
   /** Sessions opened and closed by this stand-in, so a check can tell reuse from reopen. */
   const state = { opens: 0, closes: 0 }
+  /**
+   * One deferred per kind of held statement. A check registers interest before
+   * starting the call and awaits it, so it knows the statement is running
+   * instead of sleeping and hoping the timing came out right.
+   */
+  const watchers = new Map()
+  const watch = (kind) => {
+    const { promise, resolve } = Promise.withResolvers()
+    watchers.set(kind, resolve)
+    return promise
+  }
+  const arrive = (kind) => {
+    watchers.get(kind)?.()
+    watchers.delete(kind)
+  }
   const query = (sql, project) => ({ statement: { sql, values: [] }, project })
   const rowsFor = (sql) => {
     if (sql.includes('pg_database')) return [{ name: 'app' }]
@@ -169,28 +184,61 @@ function standInDialect(label, version) {
     // Counted so a check can tell a reused session from a reopened one, and a
     // closed session from one merely forgotten.
     state,
+    watch,
     async open() {
       state.opens += 1
+      // Per session: one that retired itself is unusable even though the call it
+      // was running came back with rows.
+      let retired = false
       return {
         async run(statement) {
           // A stand-in that honours the signal proves the tools forward it: if
           // they did not, a cancelled call would run to completion instead.
           if (statement.signal?.aborted === true) throw new Error('the call was cancelled')
-          // A statement the checks hold open, so a cancellation can arrive while
-          // it is in flight rather than before it starts — the two take
-          // different paths through the runner.
+
           if (statement.sql.includes('slow')) {
-            await new Promise((resolve, reject) => {
+            // Cancellation fails the call, the way a driver that can interrupt
+            // does. Held open so the cancellation arrives in flight.
+            const held = new Promise((resolve, reject) => {
+              // A backstop, so a check that forgets to cancel fails an assertion
+              // instead of hanging the command.
               const timer = setTimeout(resolve, 5000)
               statement.signal?.addEventListener('abort', () => {
                 clearTimeout(timer)
                 reject(new Error('the call was cancelled in flight'))
               }, { once: true })
             })
+            arrive('slow')
+            await held
           }
+
+          if (statement.sql.includes('late')) {
+            // Cancellation lets the statement finish, the way MySQL does: ending
+            // its pool queues a COM_QUIT behind the running statement instead of
+            // interrupting it, so the call returns rows and the session is gone.
+            const held = new Promise((resolve) => {
+              const timer = setTimeout(resolve, 5000)
+              statement.signal?.addEventListener('abort', () => {
+                clearTimeout(timer)
+                resolve()
+              }, { once: true })
+            })
+            arrive('late')
+            await held
+            retired = true
+          }
+
+          if (statement.sql.includes('dead')) {
+            retired = true
+            throw new Error('the session is no longer usable')
+          }
+
           seen.sql = statement.sql
           return { rows: rowsFor(statement.sql), columns: [] }
         },
+        // A session that retired itself says so, which is what lets the runner
+        // evict it rather than failing every call until the plugin reloads.
+        usable: () => !retired,
         async close() { state.closes += 1 },
       }
     },
@@ -257,8 +305,12 @@ console.log(`cancellation: ${aborted.message}`)
 // leaked for the life of the process.
 const closesBefore = postgres.state.closes
 const inFlight = new AbortController()
+const slowRunning = postgres.watch('slow')
 const pending = second.tools.get('db_query').execute({ sql: 'SELECT slow' }, { signal: inFlight.signal })
-await new Promise(resolve => setTimeout(resolve, 20))
+// Waits for the statement to be running rather than sleeping: on a slow machine
+// the cancellation would otherwise arrive before the call started, and the check
+// would be measuring a different path than the one it claims to.
+await slowRunning
 inFlight.abort()
 const cancelledInFlight = await pending.then(() => undefined, error => error)
 assert.ok(cancelledInFlight instanceof Error, 'a call cancelled in flight fails')
@@ -272,6 +324,34 @@ const afterCancel = await second.tools.get('db_query').execute({ sql: 'SELECT 1'
 assert.equal(postgres.state.opens, opensAfterCancel + 1, 'the next call opened a new session')
 assertOutput(second, 'db_query', afterCancel)
 console.log(`cancellation in flight: session closed, next call reopened (${String(postgres.state.opens)} opens)`)
+
+// The cancellation MySQL really performs: the pool is ended to interrupt, which
+// queues a COM_QUIT behind the statement already running, so that statement
+// finishes and the call returns rows — and the session is gone anyway. The
+// success path has to evict it too, or every later call on that connection keeps
+// failing with the driver's own "pool is closed" and nothing pointing at why.
+const late = new AbortController()
+const lateRunning = postgres.watch('late')
+const lateCall = second.tools.get('db_query').execute({ sql: 'SELECT late' }, { signal: late.signal })
+await lateRunning
+late.abort()
+const lateRows = await lateCall
+assertOutput(second, 'db_query', lateRows)
+const opensAfterLate = postgres.state.opens
+await second.tools.get('db_query').execute({ sql: 'SELECT 1' }, CALL)
+assert.equal(postgres.state.opens, opensAfterLate + 1, 'the retired session was replaced, not kept')
+console.log('cancellation that cannot interrupt: the retired session was replaced')
+
+// A session that fails while saying it is unusable is evicted even though the
+// call was not cancelled, so the connection recovers on the next call instead of
+// failing until the plugin reloads.
+const dead = await second.tools.get('db_query').execute({ sql: 'SELECT dead' }, CALL)
+  .then(() => undefined, error => error)
+assert.ok(dead instanceof Error, 'a session that retired itself fails the call')
+const opensAfterDead = postgres.state.opens
+await second.tools.get('db_query').execute({ sql: 'SELECT 1' }, CALL)
+assert.equal(postgres.state.opens, opensAfterDead + 1, 'the unusable session was evicted')
+console.log('unusable session: evicted, next call recovered')
 
 // A dialect that cannot produce a create statement omits the field: the seam
 // degrades instead of running a statement the server does not have.

@@ -112,6 +112,14 @@ function messageOf(error: unknown): string {
 }
 
 /**
+ * Whether a live session reports itself still usable; a session with nothing to
+ * report is taken to be.
+ */
+function sessionUsable(live: LiveSession): boolean {
+  return live.session.usable?.() ?? true
+}
+
+/**
  * One plugin instance's read-only database access.
  *
  * Every call names the profile it addresses and re-resolves it, so a settings
@@ -122,6 +130,13 @@ function messageOf(error: unknown): string {
  */
 export class DatabaseAccess {
   private readonly sessions = new Map<string, LiveSession>()
+
+  /**
+   * Closes still running, including sessions already dropped from the cache.
+   * `dispose` waits for these too: a cancelled session left the cache, but the
+   * process must not let go while it is still holding a pool.
+   */
+  private readonly pendingCloses = new Set<Promise<void>>()
 
   /**
    * @param face - the connection and dialect readers every call resolves through.
@@ -193,6 +208,9 @@ export class DatabaseAccess {
     const live = [...this.sessions.values()]
     this.sessions.clear()
     for (const one of live) await this.close(one, 'closing')
+    // Sessions a cancellation dropped are no longer in the cache, but they are
+    // still closing; an unload waits for those before it calls itself done.
+    await Promise.allSettled([...this.pendingCloses])
   }
 
   /** The session for one connection identity, opening or retiring as needed. */
@@ -242,11 +260,7 @@ export class DatabaseAccess {
 
   /** Close one session exactly once, reporting a failure instead of letting it block the caller. */
   private async close(live: LiveSession, doing: string): Promise<void> {
-    if (live.closing !== undefined) {
-      await live.closing
-      return
-    }
-    live.closing = (async () => {
+    const closing = live.closing ?? (live.closing = (async () => {
       try {
         await live.session.close()
       } catch (error: unknown) {
@@ -254,8 +268,15 @@ export class DatabaseAccess {
         // an unload or the next call.
         this.face.warn(`${doing} the ${live.dialect.label} session failed: ${messageOf(error)}`)
       }
-    })()
-    await live.closing
+    })())
+    // Recorded while it runs, so `dispose` still waits for a session that a
+    // cancellation took out of the cache.
+    this.pendingCloses.add(closing)
+    try {
+      await closing
+    } finally {
+      this.pendingCloses.delete(closing)
+    }
   }
 
   /** Run one statement on a live session, wrapping any refusal with the connection it names. */
@@ -269,15 +290,22 @@ export class DatabaseAccess {
     try {
       result = await live.session.run(signal === undefined ? statement : { ...statement, signal })
     } catch (error: unknown) {
-      // A cancelled statement may have ended the session it ran on — a driver
-      // without cancellation support is ended instead — so the cache drops it
-      // and the next call opens a fresh one.
-      if (signal?.aborted === true) this.drop(live)
+      // A call that failed while cancelled, or one whose session now reports
+      // itself unusable, cannot be trusted to the cache: evict it, so the next
+      // call opens a fresh session instead of failing until the plugin reloads.
+      if (signal?.aborted === true || !sessionUsable(live)) this.drop(live)
       throw new Error(
         `${live.dialect.label} statement on ${connectionLabel(live.connection)} failed: ${messageOf(error)}`,
         { cause: error },
       )
     }
+    // Cancellation does not have to fail the call: a driver that can only retire
+    // its session — mysql2's pool has no `destroy()`, so ending it queues a
+    // COM_QUIT behind the running statement — lets that statement finish and
+    // returns its rows. The session is gone all the same, so the success path
+    // evicts it too; keeping it would make every later call on that connection
+    // fail with the driver's own "pool is closed" and nothing pointing at why.
+    if (signal?.aborted === true || !sessionUsable(live)) this.drop(live)
     // Measured before projection, so the reported time is the server's work.
     const elapsedMs = Date.now() - started
     return { rows: result.rows.map(row => toJsonRow(row)), columns: result.columns, elapsedMs }

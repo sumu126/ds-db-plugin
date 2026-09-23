@@ -326,6 +326,7 @@ pnpm dsh web --patch <插件目录>/.dev/cordis.yml
   取舍理由：目前唯一随包发布的方言是 `dsh-dialect-mysql`，与插件同仓、同版本、同一次提交；拆出第二个发布物会引入独立版本线与构建顺序，而收益（方言包依赖面收窄）在只有一个方言时不成立。
   **触发条件**：出现任何需要**独立发布**的仓外方言时，把 `dialect` / `sql-guard` / `value` / `dialect-audit` 抽成 `dsh-db-dialect-api`，两个消费者改为只依赖它。验收标准：`grep -rn "dsh-ds-db/src" dialects/` 为空，且 `dialects/*/package.json` 不再出现 `dsh-ds-db`。
 - **远程调用面走低层通道——有意偏离**：设置页用 `connection.fetch.register` 的自定义路由 + 裸 `fetch`，而不是 Typert `@Remote`（第一方 `file-upload`、`session-log-export` 是同款用法）。原因是**仓外插件无法运行仓内的 typert 生成管线**（需要 `./typert`、`./remote` 产物与 generator 参与构建）。代价是失去生成类型与统一失败词汇，`contract.ts` 里的 wire 形状是手写的——客户端因此必须自己补齐字段（`completeDescriptor`）。**触发条件**：插件进入第一方仓库，或 typert 提供面向仓外插件的生成入口。
+- **MySQL 上的取消是「退役会话」而非「中断语句」**：mysql2 的 Promise pool 没有 `destroy()`、只有 `end()`，所以中止一次调用会让池关闭、而 `COM_QUIT` 排在正在执行的语句之后——**服务端那条语句会跑完**；随后该会话被淘汰、下一次调用重建连接。要真正中断需要方言自己持有单条连接（`pool.getConnection()` → `conn.query()` → abort 时 `conn.destroy()`）
 - **没有查询结果卡片与调用卡片**：工具结果走通用呈现
 - **浏览器半边需要重新构建**：改 `src/client` 后必须 `npm run build`
 - 作为仓外插件，它不参与 `deepseek-harness` 仓库的 gate（每文件 100% 覆盖率等）；`typecheck`、`npm test`、`verify:host`、`verify:settings`、`verify:loader` 是本工程自带的检查
