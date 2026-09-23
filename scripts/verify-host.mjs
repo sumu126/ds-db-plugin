@@ -44,6 +44,52 @@ function assertOutput(ctx, name, value) {
   assert.deepEqual(violations, [], `${name} returns what its output schema declares`)
 }
 
+/** Bytes one card's metadata may take once serialized into the session log. */
+const CARD_META_BYTES = 32 * 1024
+
+/**
+ * Assert one tool's card metadata is shaped the way the client reads it.
+ *
+ * The client re-checks every field before drawing, because a replayed session can
+ * carry metadata an older version wrote; this is that contract seen from the side
+ * that writes it.
+ * @param ctx - the context holding the tool.
+ * @param name - the tool whose metadata is checked.
+ * @param args - the validated arguments of the call it describes.
+ * @param value - the canonical value that call returned.
+ * @param card - the discriminating value the metadata must carry.
+ * @returns the metadata, so a check can read further fields off it.
+ */
+function assertMeta(ctx, name, args, value, card) {
+  const tool = ctx.tools.get(name)
+  assert.ok(tool, `${name} is registered`)
+  assert.equal(typeof tool.output.presentationMeta, 'function', `${name} declares presentation metadata`)
+  const meta = tool.output.presentationMeta(args, value)
+  assert.equal(typeof meta, 'object', `${name}'s metadata is an object`)
+  assert.equal(Array.isArray(meta), false, `${name}'s metadata is not an array`)
+  assert.equal(meta.card, card, `${name}'s metadata carries card=${card}`)
+  assert.equal(typeof meta.truncated, 'boolean', `${name}'s metadata says whether it was cut`)
+  if (card === 'table') {
+    assert.ok(Array.isArray(meta.columns), `${name}'s metadata lists columns`)
+    assert.ok(meta.columns.every(column => typeof column === 'string'), `${name}'s columns are names`)
+    assert.ok(Array.isArray(meta.rows), `${name}'s metadata carries rows`)
+    assert.ok(meta.rows.every(row => Array.isArray(row) && row.length === meta.columns.length),
+      `${name}'s rows match its columns`)
+    assert.ok(meta.rows.every(row => row.every(cell => cell === null
+      || typeof cell === 'string' || typeof cell === 'number' || typeof cell === 'boolean')),
+    `${name}'s cells are scalars a column can draw`)
+    assert.ok(Number.isInteger(meta.rowCount), `${name}'s metadata carries a row count`)
+  } else {
+    assert.ok(Array.isArray(meta.items), `${name}'s metadata carries items`)
+    assert.ok(meta.items.every(item => typeof item.name === 'string'), `${name}'s items are named`)
+    assert.ok(meta.items.every(item => item.detail === undefined || typeof item.detail === 'string'),
+      `${name}'s item details are text`)
+    assert.ok(Number.isInteger(meta.total), `${name}'s metadata carries a total`)
+  }
+  assert.ok(JSON.stringify(meta).length <= CARD_META_BYTES, `${name}'s metadata stays within its bound`)
+  return meta
+}
+
 /**
  * The descriptions this plugin shipped before the dialect seam existed. The
  * seam composes them from the dialect now, so these exact strings are what
@@ -489,7 +535,47 @@ const sample = await solo.tools.get('db_sample').execute({ database: 'app', tabl
 assertOutput(solo, 'db_sample', sample)
 const plan = await solo.tools.get('db_explain').execute({ sql: 'SELECT 1' }, CALL)
 assertOutput(solo, 'db_explain', plan)
+const sampleMeta = assertMeta(solo, 'db_sample', { database: 'app', table: 'events', rows: 2 }, sample, 'table')
+assert.equal(sampleMeta.database, 'app', 'a sample card names the database it read')
+assert.equal(sampleMeta.table, 'events', 'a sample card names the table it read')
 console.log('output schemas: db_connections, db_sample, db_explain all satisfied')
+
+// The card metadata is what the Web client draws in place of the generic row. It
+// is written into the session log, so both every field's type and the whole
+// thing's size are contract here, not presentation taste.
+const queryMeta = assertMeta(second, 'db_query', { sql: 'SELECT 1' }, bounded, 'table')
+const databasesMeta = assertMeta(second, 'db_databases', {}, databases, 'list')
+const tablesMeta = assertMeta(second, 'db_tables', { database: 'app' }, listed, 'list')
+assert.deepEqual(databasesMeta.items, [{ name: 'app' }], 'a database with no charset carries no detail')
+assert.equal(tablesMeta.items[0].detail.includes('BASE TABLE'), true, 'a table detail says what the item is')
+assert.equal(tablesMeta.database, 'app', 'a table card names the database it listed')
+
+// A card past its bounds says so and stays within them: an unbounded one is a
+// session log that grows with every row a query happened to return.
+const many = {
+  columns: ['id', 'name'],
+  rows: Array.from({ length: 500 }, (_, index) => ({ id: index, name: `row-${String(index)}` })),
+  rowCount: 500,
+  truncated: false,
+  elapsedMs: 3,
+}
+const manyMeta = assertMeta(second, 'db_query', { sql: 'SELECT id, name' }, many, 'table')
+assert.equal(manyMeta.truncated, true, 'a card past the row bound says it was cut')
+assert.equal(manyMeta.rows.length, 50, 'a card carries at most the row bound')
+assert.equal(manyMeta.rowCount, 500, 'the count still reports what the server answered')
+
+// Wide cells reach the byte bound before the row bound does.
+const huge = {
+  columns: ['blob'],
+  rows: Array.from({ length: 500 }, () => ({ blob: 'x'.repeat(4096) })),
+  rowCount: 500,
+  truncated: false,
+  elapsedMs: 1,
+}
+const hugeMeta = assertMeta(second, 'db_query', { sql: 'SELECT blob' }, huge, 'table')
+assert.equal(hugeMeta.truncated, true, 'a card past the byte bound says it was cut')
+assert.equal(hugeMeta.rows.length < 50, true, 'the byte bound cut it before the row bound did')
+console.log(`cards: db_query ${String(queryMeta.columns.length)} columns, db_tables ${String(tablesMeta.items.length)} items, bounds hold`)
 await solo.fiber.dispose()
 disposeLite()
 

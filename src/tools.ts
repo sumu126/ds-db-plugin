@@ -21,8 +21,9 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ConnectionDefaults, ConnectionProfile, DatabaseSettings } from './contract.ts'
 import { connectionSummaries, resolveProfile } from './connections.ts'
 import type { DatabaseAccess } from './connection.ts'
-import type { DatabaseDialect, DialectCapability, DialectFacts, DialectIndexRow } from './dialect.ts'
+import type { DatabaseDialect, DialectCapability, DialectFacts, DialectIndexRow, DialectTableRow } from './dialect.ts'
 import { assertReadOnlyStatement, familiesPhrase } from './sql-guard.ts'
+import type { DbJson } from './value.ts'
 
 /** Identity and limits one tool call runs against. */
 export interface DatabaseToolsFace {
@@ -42,6 +43,97 @@ export interface DatabaseToolsFace {
   described: DialectFacts
   /** The current settings section, holding every saved connection. */
   settings: () => DatabaseSettings
+}
+
+/**
+ * One cell of a result card: what a table column can draw without further work.
+ *
+ * An object or an array is not something a column renders, so it travels as its
+ * JSON text: a cell is a scalar, or the card would hand React a nested shape it
+ * has no way to display.
+ */
+type CardCell = string | number | boolean | null
+
+/**
+ * One item of a list card.
+ *
+ * A type alias rather than an interface: only an alias gets the implicit index
+ * signature that lets the card be returned as `JsonValue`.
+ */
+type CardItem = {
+  /** What the item is called. */
+  name: string
+  /** What it is, when the tool knows more than its name. */
+  detail?: string
+}
+
+/** Rows one table card carries: the metadata is written into the session log. */
+const CARD_ROWS = 50
+
+/** Items one list card carries, for the same reason. */
+const CARD_ITEMS = 100
+
+/** Serialized bytes one card's body may take; a card past this stops early. */
+const CARD_BYTES = 16 * 1024
+
+/** One value as a cell can draw it. */
+function cardCell(value: DbJson | undefined): CardCell {
+  if (value === undefined || value === null) return null
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value
+  return JSON.stringify(value)
+}
+
+/** One row's cells, in the order the server answered the columns. */
+function cardRow(columns: readonly string[], row: DbJson): CardCell[] {
+  // A row the server answered is an object keyed by column name; anything else
+  // has no cells to show, so every column reads empty rather than throwing.
+  if (row === null || typeof row !== 'object' || Array.isArray(row)) return columns.map(() => null)
+  return columns.map(name => cardCell(row[name]))
+}
+
+/**
+ * Bound a table card, and say whether it was cut.
+ * @param columns - the columns, in the order the server answered them.
+ * @param rows - every row the tool answered with.
+ * @returns the rows to draw, and whether anything was left out.
+ */
+function cardRows(columns: readonly string[], rows: readonly DbJson[]): { rows: CardCell[][], truncated: boolean } {
+  const kept: CardCell[][] = []
+  let used = 0
+  for (const row of rows.slice(0, CARD_ROWS)) {
+    const cells = cardRow(columns, row)
+    const size = JSON.stringify(cells).length
+    if (used + size > CARD_BYTES) break
+    used += size
+    kept.push(cells)
+  }
+  return { rows: kept, truncated: kept.length < rows.length }
+}
+
+/**
+ * Bound a list card, and say whether it was cut.
+ * @param items - every item the tool answered with.
+ * @returns the items to draw, and whether anything was left out.
+ */
+function cardItems(items: readonly CardItem[]): { items: CardItem[], truncated: boolean } {
+  const kept: CardItem[] = []
+  let used = 0
+  for (const item of items.slice(0, CARD_ITEMS)) {
+    const size = JSON.stringify(item).length
+    if (used + size > CARD_BYTES) break
+    used += size
+    kept.push(item)
+  }
+  return { items: kept, truncated: kept.length < items.length }
+}
+
+/** One table's line of detail: what it is, what it runs on, and what it says about itself. */
+function tableDetail(row: DialectTableRow): string {
+  const parts = [row.type]
+  if (row.engine !== null && row.engine.length > 0) parts.push(row.engine)
+  if (row.estimatedRows !== null) parts.push(`~${String(row.estimatedRows)} rows`)
+  if (row.comment.length > 0) parts.push(row.comment)
+  return parts.join(' · ')
 }
 
 /** The parameter one call names its connection with, when it names one. */
@@ -144,6 +236,18 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
           ? 'No databases are visible to this connection.'
           : value.databases.map(row => `${row.name} (${row.charset}/${row.collation})`).join('\n'),
       }],
+      presentationMeta: (_args, value) => {
+        const card = cardItems(value.databases.map(row => row.charset.length === 0
+          ? { name: row.name }
+          : { name: row.name, detail: `${row.charset}/${row.collation}` }))
+        return {
+          card: 'list',
+          label: 'databases',
+          items: card.items,
+          total: value.databases.length,
+          truncated: card.truncated,
+        }
+      },
     },
     async execute(args, exec) {
       const { profile: target, view } = addressed(args.connection)
@@ -197,6 +301,17 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
             `- ${row.name} [${row.type}${row.engine === null ? '' : `, ${row.engine}`}${row.estimatedRows === null ? '' : `, ~${String(row.estimatedRows)} rows`}]${row.comment.length === 0 ? '' : ` — ${row.comment}`}`,
           )].join('\n'),
       }],
+      presentationMeta: (_args, value) => {
+        const card = cardItems(value.tables.map(row => ({ name: row.name, detail: tableDetail(row) })))
+        return {
+          card: 'list',
+          label: 'tables',
+          database: value.database,
+          items: card.items,
+          total: value.tables.length,
+          truncated: card.truncated,
+        }
+      },
     },
     async execute(args, exec) {
       const { profile: target, view } = addressed(args.connection)
@@ -343,6 +458,19 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
             : `${rows}\n(${String(value.rowCount)} rows in ${String(value.elapsedMs)} ms)`,
         }]
       },
+      presentationMeta: (_args, value) => {
+        const card = cardRows(value.columns, value.rows)
+        // Either bound cutting the card is the fact a reader needs, so the two
+        // are one flag here: the tool's own row cap, and the card's own limits.
+        return {
+          card: 'table',
+          columns: [...value.columns],
+          rows: card.rows,
+          rowCount: value.rowCount,
+          truncated: value.truncated || card.truncated,
+          elapsedMs: value.elapsedMs,
+        }
+      },
     },
     async execute(args, exec) {
       const { profile: target, view } = addressed(args.connection)
@@ -387,6 +515,18 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
           type: 'text',
           text: `${value.database}.${value.table}: ${JSON.stringify(value.rows)}`,
         }],
+        presentationMeta: (_args, value) => {
+          const card = cardRows(value.columns, value.rows)
+          return {
+            card: 'table',
+            database: value.database,
+            table: value.table,
+            columns: [...value.columns],
+            rows: card.rows,
+            rowCount: value.rows.length,
+            truncated: card.truncated,
+          }
+        },
       },
       async execute(args, exec) {
         const { profile: target, view } = addressed(args.connection)
