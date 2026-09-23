@@ -288,6 +288,7 @@ async function checkCancellation(name) {
  * user's own connections carry the deployment's 30 s, and borrowing one of those
  * would make this check wait half a minute to prove a one-and-a-half-second rule.
  * @param base - a saved connection to copy, addressed by the composition layer.
+ * @returns how long the statement took to fail, for the caller's ledger.
  */
 async function checkTimeout(base) {
   const timing = new Context()
@@ -308,9 +309,8 @@ async function checkTimeout(base) {
   const elapsed = Date.now() - started
   assert.ok(outcome instanceof Error, 'a statement past the query timeout fails instead of hanging')
   assert.ok(elapsed < 4500, `and it fails before the statement would have finished (${String(elapsed)} ms)`)
-  console.log(`  timeout: a 1.5 s timeout ended a 5 s statement after ${String(elapsed)} ms`
-    + ` (measured on "${base.name}" only — the timeout lives on a connection)`)
   await timing.fiber.dispose()
+  return elapsed
 }
 
 const listed = await call('db_connections', {})
@@ -340,7 +340,13 @@ for (const name of names) {
 const profiles = ctx.settings.section(DB_SETTINGS_NAMESPACE)?.connections ?? []
 const base = profiles.find(profile => profile.name === names[0])
 assert.ok(base !== undefined, `the settings section holds a profile named "${names[0]}"`)
-await checkTimeout(base)
+// Its own section rather than a line under the last connection's: this check
+// belongs to no connection in particular, and printing it inside one is how a
+// ledger ends up asserting something the run did not do.
+console.log('\n--- timeout (a connection-level setting, so it is measured on one connection) ---')
+const timingElapsed = await checkTimeout(base)
+console.log(`  timeout: a 1.5 s timeout ended a 5 s statement after ${String(timingElapsed)} ms`
+  + ` — copied from the profile "${base.name}"`)
 
 console.log(`\nsettings section: ${String(profiles.length)} connection(s)`)
 console.log('live database check passed')

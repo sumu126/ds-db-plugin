@@ -356,6 +356,17 @@ pnpm dsh web --patch <插件目录>/.dev/cordis.yml
 
 `tsconfig.json` 与 `tsconfig.types.json` 里的 `../deepseek-harness/...` 是**开发期约定**：`typecheck`、`test`、`verify:host`、`verify:settings`、`verify:loader`、`verify:cards` 都需要旁边有一份 harness checkout，换机器要同步调整这些 `paths`。**`npm run build` 与用户安装不受影响**——产物里的 harness 依赖是外部的，由宿主提供。
 
+### 发布前清单
+
+```sh
+pnpm install --frozen-lockfile        # lockfile 必须与 package.json 一致
+pnpm run typecheck && pnpm test
+pnpm run verify:host && pnpm run verify:settings && pnpm run verify:loader && pnpm run verify:cards
+pnpm pack                             # prepack 会 build；只有 pnpm 会把 workspace: 改写成版本号
+```
+
+第一条不是形式主义：这个仓库的 `pnpm-lock.yaml` **曾经在主分支上腐烂了十几个提交**——它的根 importer 还停在"依赖只有 mysql2"的形态，`dialects/mysql` 这个 workspace 成员从未出现在里面。原因是本仓的 pnpm 路径长期没被走通（一直在用 `npm install --legacy-peer-deps` 绕），于是同时掩盖了两件事：pnpm 会自动安装缺失的 peer（而本插件的 peer 全是宿主提供、未发布的包），以及 lockfile 早已过期。两笔账在依赖改用只有 pnpm 认的 `workspace:` 那一刻同时到期。所以：**lockfile 要么被 gate，要么删掉——一个说谎的 lockfile 比没有更糟**。这里选 gate，就是这第一条。
+
 改动落在哪一层：
 
 | 想做什么 | 改哪 |
