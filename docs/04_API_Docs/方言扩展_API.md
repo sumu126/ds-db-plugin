@@ -186,6 +186,7 @@ configFields: [{ key: 'serviceName', kind: 'text', default: 'ORCL', required: tr
 - [ ] 每条元数据查询都给出正确的 `project`
 - [ ] `close()` 不抛出阻塞卸载的异常，且可被重复调用
 - [ ] 取消靠「退役会话」的话，实现了 `usable()` 并在退役后返回 `false`
+- [ ] 知道 `db_sample` / `db_explain` 的注册条件：工具按**活动连接的方言**描述，你的方言必须在该连接被描述前注册（否则描述取自拒绝桩，两个工具不注册；`dialectWaitMs` 超时后同理）
 - [ ] `capabilities` 如实声明
 - [ ] `peerDependencies` 声明 `dsh-ds-db`
 - [ ] 在打包版 dsh 上 `dsh plugin add` 实测通过（不是只在源码态跑通）

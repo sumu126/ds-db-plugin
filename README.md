@@ -273,6 +273,7 @@ cd <你的方言目录> && git init && npm run verify && npm publish
 | 调用报「dialect X is not registered」 | 你的包没被加载；用 `dsh --dump-config` 确认那一层在 |
 | 工具描述里还是旧的自称 | 已知行为：描述注册时写定，重载后更新；**调用不受影响** |
 | 设置页没出现我的类型 | 页面从 `GET /api/ds-db/dialects` 读注册表；确认你的方言注册成功 |
+| 我声明了 `sample`，却没有 `db_sample` 工具 | 工具按**活动连接的方言**描述。活动连接指向的方言尚未注册时（或超过 `dialectWaitMs` 才注册），描述来自拒绝桩，两个可选工具就不注册——重载插件即可 |
 | 改了浏览器侧内容没生效 | 浏览器半边是构建产物，必须重新 build |
 
 ## 给插件开发者：本地开发

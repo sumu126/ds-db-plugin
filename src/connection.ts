@@ -155,8 +155,7 @@ export class DatabaseAccess {
    * @throws {Error} when the server refuses the statement or the session cannot reach it.
    */
   async run<R>(profile: ConnectionProfile, query: DialectQuery<R>, signal?: AbortSignal): Promise<R[]> {
-    const live = await this.session(profile)
-    const { rows } = await this.statement(live, query.statement, signal)
+    const { rows } = await this.attempt(profile, query.statement, signal)
     return rows.map(row => query.project(row))
   }
 
@@ -174,13 +173,44 @@ export class DatabaseAccess {
     values: readonly DbScalar[] = [],
     signal?: AbortSignal,
   ): Promise<QueryOutcome> {
-    const live = await this.session(profile)
-    const { rows, columns, elapsedMs } = await this.statement(live, { sql, values }, signal)
+    const { live, rows, columns, elapsedMs } = await this.attempt(profile, { sql, values }, signal)
     return {
       columns,
       rows: rows.slice(0, live.connection.maxRows),
       truncated: rows.length > live.connection.maxRows,
       elapsedMs,
+    }
+  }
+
+  /**
+   * Run one statement, opening a session and replacing one the dialect reports
+   * unusable.
+   *
+   * The second try is for a session that died for a reason no call caused — a
+   * pool closed outside this plugin — where the driver's own message ("pool is
+   * closed") tells a model nothing it can act on. Every statement reaching here
+   * has already passed the dialect's read-only rules, so running it again on a
+   * fresh session cannot double an effect.
+   * @param profile - the saved connection the call addresses.
+   * @param statement - the statement to run.
+   * @param signal - the call's cancellation.
+   * @returns the rows, the columns, the elapsed time, and the session that ran it.
+   * @throws {Error} when the server refuses the statement on a usable session too.
+   */
+  private async attempt(
+    profile: ConnectionProfile,
+    statement: DialectStatement,
+    signal?: AbortSignal,
+  ): Promise<{ live: LiveSession, rows: DbRow[], columns: string[], elapsedMs: number }> {
+    const first = await this.session(profile)
+    try {
+      return { live: first, ...await this.statement(first, statement, signal) }
+    } catch (error: unknown) {
+      // `statement` evicts a session it found unusable before it throws, so an
+      // unusable one here means the next call would already open another.
+      if (sessionUsable(first)) throw error
+      const second = await this.session(profile)
+      return { live: second, ...await this.statement(second, statement, signal) }
     }
   }
 
@@ -209,8 +239,12 @@ export class DatabaseAccess {
     this.sessions.clear()
     for (const one of live) await this.close(one, 'closing')
     // Sessions a cancellation dropped are no longer in the cache, but they are
-    // still closing; an unload waits for those before it calls itself done.
-    await Promise.allSettled([...this.pendingCloses])
+    // still closing; an unload waits for those before it calls itself done. The
+    // set is re-read rather than snapshotted, so a close starting while this
+    // waits is waited for too instead of being left behind.
+    while (this.pendingCloses.size > 0) {
+      await Promise.allSettled([...this.pendingCloses])
+    }
   }
 
   /** The session for one connection identity, opening or retiring as needed. */

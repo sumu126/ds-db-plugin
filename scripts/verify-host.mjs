@@ -16,6 +16,7 @@ import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools/src/json-schema.ts'
 import * as mysqlReadOnly from '../src/index.ts'
 import { dialectCatalog } from '../src/index.ts'
+import { DatabaseAccess } from '../src/connection.ts'
 import * as mysqlDialect from '../dialects/mysql/src/index.ts'
 import { MYSQL_DIALECT } from '../dialects/mysql/src/index.ts'
 
@@ -145,13 +146,24 @@ const seen = { sql: '' }
  * the way a different server spells it, which is what makes the assertions
  * below discriminate this dialect from MySQL's.
  */
-function standInDialect(label, version) {
-  /** Sessions opened and closed by this stand-in, so a check can tell reuse from reopen. */
-  const state = { opens: 0, closes: 0 }
+function standInDialect(label, version, name = 'postgres') {
+  /**
+   * What the checks watch: sessions opened and closed, so a check can tell reuse
+   * from reopen; deaths, so one check can make a session die exactly once; and
+   * switches that hold a statement or a close open long enough to be interrupted
+   * or waited for.
+   */
+  const state = {
+    opens: 0, closes: 0, deaths: 0,
+    holdVersion: false, holdClose: false, closeFinished: false,
+  }
   /**
    * One deferred per kind of held statement. A check registers interest before
    * starting the call and awaits it, so it knows the statement is running
    * instead of sleeping and hoping the timing came out right.
+   *
+   * Single-slot per kind: watching a kind twice before the first arrives replaces
+   * the first watcher. That is enough for these checks, not a general signal.
    */
   const watchers = new Map()
   const watch = (kind) => {
@@ -172,12 +184,12 @@ function standInDialect(label, version) {
     return []
   }
   return {
-    name: 'postgres',
+    name,
     label,
     rules: MYSQL_DIALECT.rules,
     // Every ability but `createStatement`: this server has no way to render
     // one, and the seam says so instead of returning a guess.
-    capabilities: new Set(['databases', 'tables', 'columns', 'indexes', 'estimatedRows', 'charset', 'version']),
+    capabilities: new Set(['databases', 'tables', 'columns', 'indexes', 'estimatedRows', 'charset', 'version', 'sample', 'explain']),
     configFields: [{ key: 'serviceName', kind: 'text', default: 'ORCL', required: true, label: 'Service name' }],
     rowBoundHint: 'FETCH FIRST',
     systemDatabases: [],
@@ -195,6 +207,19 @@ function standInDialect(label, version) {
           // A stand-in that honours the signal proves the tools forward it: if
           // they did not, a cancelled call would run to completion instead.
           if (statement.signal?.aborted === true) throw new Error('the call was cancelled')
+
+          if (state.holdVersion && statement.sql.includes('version')) {
+            // Held so a probe can be cancelled while it waits for the version.
+            const held = new Promise((resolve, reject) => {
+              const timer = setTimeout(resolve, 5000)
+              statement.signal?.addEventListener('abort', () => {
+                clearTimeout(timer)
+                reject(new Error('the probe was cancelled'))
+              }, { once: true })
+            })
+            arrive('probe')
+            await held
+          }
 
           if (statement.sql.includes('slow')) {
             // Cancellation fails the call, the way a driver that can interrupt
@@ -228,7 +253,10 @@ function standInDialect(label, version) {
             retired = true
           }
 
-          if (statement.sql.includes('dead')) {
+          // Dies exactly once, so the retry the runner performs has a healthy
+          // session to land on — a driver's pool closed outside this plugin.
+          if (statement.sql.includes('dead') && state.deaths === 0) {
+            state.deaths += 1
             retired = true
             throw new Error('the session is no longer usable')
           }
@@ -239,7 +267,14 @@ function standInDialect(label, version) {
         // A session that retired itself says so, which is what lets the runner
         // evict it rather than failing every call until the plugin reloads.
         usable: () => !retired,
-        async close() { state.closes += 1 },
+        async close() {
+          if (state.holdClose) {
+            // Held, so a check can assert that `dispose` waited for it.
+            await new Promise(resolve => setTimeout(resolve, 25))
+            state.closeFinished = true
+          }
+          state.closes += 1
+        },
       }
     },
     applyRowLimit: (sql, maxRows) => `${sql}\nFETCH FIRST ${maxRows + 1} ROWS ONLY`,
@@ -261,12 +296,40 @@ function standInDialect(label, version) {
     })),
     createStatement: () => query('SELECT pg_get_tabledef()', () => ''),
     version: () => query('SELECT version() AS version', row => String(row.version ?? '')),
+    // The two optional abilities, so the tools that only exist for a dialect
+    // declaring them have an output a check can validate.
+    sample: (database, table, rows) => query(`SELECT * FROM "${database}"."${table}" LIMIT ${rows}`, row => row),
+    explain: (sql) => query(`EXPLAIN ${sql}`, row => JSON.stringify(row)),
   }
 }
 
 // A dialect that arrives after this plugin — the shape a separately packaged
 // dialect has, since the registry is provided here — runs every call after it.
 const postgres = standInDialect('PostgreSQL', '16.3')
+
+/**
+ * A DatabaseAccess of its own, so the checks addressing `probe` and `dispose`
+ * directly do not disturb the sessions the tool calls above are using.
+ * @param dialect - the dialect its sessions open through.
+ * @returns the access, with a face that resolves the profile straight through.
+ */
+function ownAccess(dialect) {
+  return new DatabaseAccess({
+    connection: async profile => ({
+      host: profile.host,
+      port: profile.port,
+      user: profile.user,
+      password: 'not-a-real-password',
+      database: profile.database,
+      extra: profile.extra,
+      connectTimeoutMs: profile.connectTimeoutMs,
+      queryTimeoutMs: profile.queryTimeoutMs,
+      maxRows: profile.maxRows,
+    }),
+    dialect: () => dialect,
+    warn: () => {},
+  })
+}
 const dispose = second.databaseDialects.register(postgres)
 const listed = await second.tools.get('db_tables').execute({ database: 'app' }, CALL)
 assert.deepEqual(listed, {
@@ -342,16 +405,96 @@ await second.tools.get('db_query').execute({ sql: 'SELECT 1' }, CALL)
 assert.equal(postgres.state.opens, opensAfterLate + 1, 'the retired session was replaced, not kept')
 console.log('cancellation that cannot interrupt: the retired session was replaced')
 
-// A session that fails while saying it is unusable is evicted even though the
-// call was not cancelled, so the connection recovers on the next call instead of
-// failing until the plugin reloads.
-const dead = await second.tools.get('db_query').execute({ sql: 'SELECT dead' }, CALL)
-  .then(() => undefined, error => error)
-assert.ok(dead instanceof Error, 'a session that retired itself fails the call')
-const opensAfterDead = postgres.state.opens
-await second.tools.get('db_query').execute({ sql: 'SELECT 1' }, CALL)
-assert.equal(postgres.state.opens, opensAfterDead + 1, 'the unusable session was evicted')
-console.log('unusable session: evicted, next call recovered')
+// A session that dies without a cancellation — a pool closed outside this plugin
+// — would otherwise fail that call with the driver's own "pool is closed", which
+// tells a model nothing it can act on. Every statement reaching the runner has
+// passed the read-only rules, so it is retried once on a fresh session and the
+// model never sees the failure.
+const opensBeforeDead = postgres.state.opens
+const deathsBefore = postgres.state.deaths
+const recovered = await second.tools.get('db_query').execute({ sql: 'SELECT dead' }, CALL)
+assertOutput(second, 'db_query', recovered)
+assert.equal(postgres.state.deaths, deathsBefore + 1, 'the dead session was reached once')
+assert.equal(postgres.state.opens, opensBeforeDead + 1, 'the retry opened a fresh session')
+console.log('dead session: the read-only call was retried and succeeded')
+
+// Every tool's output has to satisfy the schema it declares, not only the four
+// the description checks cover. `db_connections` is the one whose schema broke
+// before, and the two optional tools exist only because the dialect in force
+// declares the ability, so nothing else exercises their schemas.
+const connections = await second.tools.get('db_connections').execute({}, CALL)
+assertOutput(second, 'db_connections', connections)
+
+// `db_sample` and `db_explain` exist only for a dialect declaring the ability, and
+// the tools are described from the dialect the *active connection* names — so an
+// instance whose active connection names a dialect nothing registers has neither
+// tool, by design (`second` above is exactly that). An instance whose only dialect
+// is the stand-in is the shape a deployment with one third-party dialect has, and
+// there both tools are registered and can answer.
+const solo = new Context()
+await solo.plugin(SystemPrompt, {})
+await solo.plugin(ToolRuntime, { mode: 'native', maxParallelSubCalls: 1 })
+await solo.plugin(mysqlReadOnly, {
+  connections: [{
+    id: 'lite', name: 'Lite', dialect: 'lite', extra: {},
+    host: '127.0.0.1', port: 1, user: 'nobody', database: 'app',
+    passwordEnv: 'LITE_PASSWORD', connectTimeoutMs: 1000, queryTimeoutMs: 1000, maxRows: 200,
+  }],
+})
+// Registering it wakes the plugin's wait, so the tools are described from the
+// dialect that is really there instead of the refusing stand-in.
+const disposeLite = solo.databaseDialects.register(standInDialect('Lite', '1.0', 'lite'))
+for (let attempt = 0; attempt < 100 && solo.tools.get('db_query') === undefined; attempt++) {
+  await new Promise(resolve => setTimeout(resolve, 10))
+}
+assert.ok(solo.tools.get('db_sample'), 'a dialect declaring sample registers the tool')
+const sample = await solo.tools.get('db_sample').execute({ database: 'app', table: 'events', rows: 2 }, CALL)
+assertOutput(solo, 'db_sample', sample)
+const plan = await solo.tools.get('db_explain').execute({ sql: 'SELECT 1' }, CALL)
+assertOutput(solo, 'db_explain', plan)
+console.log('output schemas: db_connections, db_sample, db_explain all satisfied')
+await solo.fiber.dispose()
+disposeLite()
+
+// The probe route hands the request's signal down to the version query, so a page
+// that navigated away stops waiting instead of holding a session to its timeout.
+const probeProfile = {
+  id: 'probe', name: 'Probe', dialect: 'postgres', extra: {},
+  host: '127.0.0.1', port: 1, user: 'nobody', database: '',
+  passwordEnv: 'PROBE_PASSWORD', connectTimeoutMs: 1000, queryTimeoutMs: 1000, maxRows: 200,
+}
+const probeAccess = ownAccess(postgres)
+postgres.state.holdVersion = true
+const probeCancel = new AbortController()
+const probeRunning = postgres.watch('probe')
+const probing = probeAccess.probe(probeProfile, probeCancel.signal)
+await probeRunning
+probeCancel.abort()
+const cancelledProbe = await probing.then(() => undefined, error => error)
+assert.ok(cancelledProbe instanceof Error, 'a cancelled probe fails instead of waiting out its timeout')
+assert.match(cancelledProbe.message, /the probe was cancelled/)
+postgres.state.holdVersion = false
+const opensBeforeProbe = postgres.state.opens
+const probed = await probeAccess.probe(probeProfile, CALL.signal)
+assert.equal(probed.version, '16.3', 'the next probe answered a version')
+assert.equal(postgres.state.opens, opensBeforeProbe + 1, 'the cancelled probe session was evicted')
+console.log('probe cancellation: session evicted, the next probe opened one')
+
+// `dispose` waits for a session a cancellation already dropped: it left the
+// cache, but the process must not let go while its pool is still closing.
+postgres.state.holdClose = true
+postgres.state.closeFinished = false
+const disposeAccess = ownAccess(postgres)
+const disposeCancel = new AbortController()
+const disposeRunning = postgres.watch('slow')
+const heldCall = disposeAccess.query(probeProfile, 'SELECT slow', [], disposeCancel.signal)
+await disposeRunning
+disposeCancel.abort()
+await heldCall.then(() => undefined, () => undefined)
+await disposeAccess.dispose()
+assert.equal(postgres.state.closeFinished, true, 'dispose waited for the dropped session to close')
+postgres.state.holdClose = false
+console.log('dispose: waited for a session a cancellation had dropped')
 
 // A dialect that cannot produce a create statement omits the field: the seam
 // degrades instead of running a statement the server does not have.

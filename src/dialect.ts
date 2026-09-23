@@ -114,6 +114,12 @@ export interface DialectStatement {
    * A dialect that retires its session rather than interrupting the statement
    * says so through {@link DialectSession.usable}; the runner then evicts that
    * session whether the call came back with an error or with rows.
+   *
+   * That eviction is unconditional, so even a dialect whose driver cancels
+   * cleanly sees its session closed and rebuilt after a cancellation. An
+   * interrupted statement can leave unread packets on a connection, and a
+   * connection that is merely probably-fine is not one a read-only tool should
+   * keep answering from.
    */
   readonly signal?: AbortSignal
 }
