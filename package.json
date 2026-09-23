@@ -39,7 +39,8 @@
     "test:dialects": "npm --prefix dialects/mysql test",
     "overlay": "node scripts/dev-overlay.mjs",
     "verify:host": "node --import tsx/esm scripts/verify-host.mjs",
-    "verify:settings": "node --import tsx/esm scripts/verify-settings.mts"
+    "verify:settings": "node --import tsx/esm scripts/verify-settings.mts",
+    "verify:loader": "node --import tsx/esm tests/loader-smoke.mjs"
   },
   "dependencies": {
     "clsx": "^2.1.1",
