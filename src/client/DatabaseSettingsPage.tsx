@@ -9,6 +9,7 @@
  */
 
 import { useEffect, useRef } from 'react'
+import clsx from 'clsx'
 import { Button, IconPlusOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ConnectionCard, DbDialog, DbFormField, DbPageFace, DbProbe } from './form.ts'
@@ -63,13 +64,13 @@ function ProbeLine(props: { probe: DbProbe, t: (key: DbLocaleKey, params?: Recor
   const { probe } = props
   if (probe.status === 'ok') {
     return (
-      <span className={`${styles.cardLine} ${styles.probeOk}`}>
+      <span className={clsx(styles.cardLine, styles.probeOk)}>
         {props.t('testOk', { version: probe.version, latency: String(probe.latencyMs) })}
       </span>
     )
   }
   if (probe.status === 'failed') {
-    return <span className={`${styles.cardLine} ${styles.probeFailed}`}>{props.t('testFailed', { message: probe.message })}</span>
+    return <span className={clsx(styles.cardLine, styles.probeFailed)}>{props.t('testFailed', { message: probe.message })}</span>
   }
   return null
 }
@@ -90,7 +91,7 @@ function Card(props: {
     <div className={styles.card}>
       <div className={styles.cardHead}>
         <span className={styles.cardName}>{card.profile.name}</span>
-        <span className={card.active ? `${styles.badge} ${styles.badgeActive}` : styles.badge}>
+        <span className={clsx(styles.badge, card.active && styles.badgeActive)}>
           {card.active ? t('inUse') : card.profile.dialect}
         </span>
       </div>
@@ -100,14 +101,14 @@ function Card(props: {
         <span className={styles.cardLine}>
           {`${card.resolved.host}:${String(card.resolved.port)} · ${card.resolved.user}`}
         </span>
-        <span className={`${styles.cardLine} ${card.resolved.database.length === 0 ? styles.cardLineMuted : ''}`}>
+        <span className={clsx(styles.cardLine, card.resolved.database.length === 0 && styles.cardLineMuted)}>
           {card.resolved.database.length === 0 ? t('noDatabase') : card.resolved.database}
         </span>
-        <span className={`${styles.cardLine} ${card.passwordConfigured ? styles.probeOk : styles.cardLineMuted}`}>
+        <span className={clsx(styles.cardLine, card.passwordConfigured ? styles.probeOk : styles.cardLineMuted)}>
           {card.passwordConfigured ? t('passwordSet') : t('passwordUnset')}
         </span>
         {card.probe.status === 'running'
-          ? <span className={`${styles.cardLine} ${styles.cardLineMuted}`}>{t('testing')}</span>
+          ? <span className={clsx(styles.cardLine, styles.cardLineMuted)}>{t('testing')}</span>
           : <ProbeLine probe={card.probe} t={t} />}
       </div>
       <div className={styles.cardActions}>

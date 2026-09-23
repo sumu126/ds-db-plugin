@@ -97,6 +97,23 @@ export interface Config {
   connections?: ConnectionProfile[]
   /** The connection the tools address by id; defaults to the first saved one. */
   activeId?: string
+  /**
+   * How long tool registration waits for the configured dialect package, in
+   * milliseconds.
+   *
+   * Long enough for a sibling row of the same patch to activate, short enough
+   * that a missing package still ends with registered tools.
+   * @default 100
+   */
+  dialectWaitMs?: number
+  /**
+   * Sessions this plugin keeps open at once, one per connection identity.
+   *
+   * Past this many, the least recently used is closed, so a page full of
+   * connections cannot hold an unbounded number of pools open.
+   * @default 4
+   */
+  sessionLimit?: number
 }
 
 /** Validated composition configuration. */
@@ -112,6 +129,8 @@ export const Config: z<Config> = z.object({
   dialect: z.string(),
   connections: z.array(ProfileSchema),
   activeId: z.string(),
+  dialectWaitMs: z.natural().min(1),
+  sessionLimit: z.natural().min(1),
 })
 
 /** The flat connection the composition fields describe. */

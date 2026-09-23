@@ -129,13 +129,24 @@ class MysqlSession implements DialectSession {
    * @throws {Error} when the server refuses the statement or the result carries no row set.
    */
   async run(query: DialectStatement): Promise<{ rows: unknown[], columns: string[] }> {
-    const [rows, fields] = await this.pool.query({
-      sql: query.sql,
-      values: [...query.values],
-      timeout: this.queryTimeoutMs,
-    })
-    if (!Array.isArray(rows)) throw new Error('the statement returned no result set')
-    return { rows, columns: columnsOf(fields) }
+    const { signal } = query
+    if (signal?.aborted === true) throw new Error('the statement was cancelled before it ran')
+    // mysql2 takes no AbortSignal, so cancellation ends the pool instead. The
+    // session is unusable afterwards, which is why the runner drops it from its
+    // cache and the next call opens a fresh one.
+    const cancel = (): void => { void this.pool.end().catch(() => {}) }
+    signal?.addEventListener('abort', cancel, { once: true })
+    try {
+      const [rows, fields] = await this.pool.query({
+        sql: query.sql,
+        values: [...query.values],
+        timeout: this.queryTimeoutMs,
+      })
+      if (!Array.isArray(rows)) throw new Error('the statement returned no result set')
+      return { rows, columns: columnsOf(fields) }
+    } finally {
+      signal?.removeEventListener('abort', cancel)
+    }
   }
 
   /** Close the pool. */

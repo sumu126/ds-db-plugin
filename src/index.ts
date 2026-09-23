@@ -19,7 +19,7 @@ import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type {} from '@deepseek-ai/dsh-credentials'
 import type {} from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-tools'
-import { DatabaseAccess } from './connection.ts'
+import { DatabaseAccess, SESSION_LIMIT } from './connection.ts'
 import { activeConnection } from './connections.ts'
 import {
   DB_DIALECTS_PATH, DB_SETTINGS_NAMESPACE, DB_TEST_PATH, UNSET_PORT,
@@ -115,7 +115,10 @@ export function apply(ctx: Context, config: Config): void {
   const access = new DatabaseAccess({
     connection: async profile => await resolveConnection(ctx, profile, readDialectFor(profile)),
     dialect: readDialectFor,
-  })
+    // A session that cannot drain is reported where the deployment's other
+    // warnings go, not to the process stream behind the harness's back.
+    warn: (message) => { ctx.logger.warn(message) },
+  }, config.sessionLimit ?? SESSION_LIMIT)
   ctx.effect(() => () => { void access.dispose() }, 'ds-db: database session')
   // Model-facing descriptions are fixed when the tools are registered, so they
   // are written from the dialect's own facts rather than from its name. The
@@ -142,7 +145,7 @@ export function apply(ctx: Context, config: Config): void {
   }
   ctx.effect(() => {
     const waiting = registry.whenRegistered(initialDialect, registerTools)
-    const timer = setTimeout(registerTools, DIALECT_WAIT_MS)
+    const timer = setTimeout(registerTools, config.dialectWaitMs ?? DIALECT_WAIT_MS)
     // A pending timer must not hold the process open once the plugin unloads.
     timer.unref?.()
     return () => {
@@ -316,7 +319,11 @@ async function probeProfile(
   try {
     const dialect = resolveDialect(registry, profile.dialect)
     const connection = await resolveConnection(ctx, profile, dialect)
-    const access = new DatabaseAccess({ connection: async () => connection, dialect: () => dialect })
+    const access = new DatabaseAccess({
+      connection: async () => connection,
+      dialect: () => dialect,
+      warn: (message) => { ctx.logger.warn(message) },
+    })
     try {
       const probe = await access.probe(profile)
       return { ok: true, version: probe.version, latencyMs: probe.latencyMs }

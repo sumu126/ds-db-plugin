@@ -1,7 +1,7 @@
 /**
- * Browser half of the MySQL plugin: it registers the MySQL settings page, and
- * the page's data — the settings scope, the credential control, and the
- * connection probe — reaches it through this plugin's inject face.
+ * Browser half of the database plugin: it registers the connection settings
+ * page, and the page's data — the settings scope, the credential control, and
+ * the connection probe — reaches it through this plugin's inject face.
  *
  * @module dsh-ds-db/src/client
  */
@@ -20,7 +20,7 @@ import { DatabaseSettingsController, type DbCredentialsFace } from './form.ts'
 import { DatabaseSettingsPage } from './DatabaseSettingsPage.tsx'
 import {
   DB_DIALECTS_PATH, DB_SETTINGS_NAMESPACE, DB_TEST_PATH,
-  type ConnectionProfile, type DatabaseSettings, type DialectCatalog, type ProbeRequest,
+  type ConnectionProfile, type DatabaseSettings, type DialectCatalog, type DialectDescriptor, type ProbeRequest,
 } from '../contract.ts'
 
 import { en, zh, type DbLocaleKey } from './locales.ts'
@@ -85,13 +85,32 @@ async function loadCatalog(): Promise<DialectCatalog> {
   try {
     const response = await fetch(DB_DIALECTS_PATH, { method: 'GET' })
     if (!response.ok) return { installed: [], known: [] }
-    const payload = await response.json() as DialectCatalog
+    const payload = await response.json() as Partial<DialectCatalog>
     return {
-      installed: payload.installed ?? [],
+      // Every descriptor is completed here, so the page never reads a field a
+      // Host of another version did not send.
+      installed: (payload.installed ?? []).map(completeDescriptor),
       known: payload.known ?? [],
     }
   } catch {
     return { installed: [], known: [] }
+  }
+}
+
+/**
+ * One descriptor with the fields a Host may not have sent filled in.
+ * @param entry - what the catalog route answered with.
+ * @returns a descriptor the page can read without guarding every field.
+ */
+function completeDescriptor(entry: DialectDescriptor): DialectDescriptor {
+  return {
+    name: entry.name,
+    label: entry.label ?? entry.name,
+    ...entry.description === undefined ? {} : { description: entry.description },
+    capabilities: entry.capabilities ?? [],
+    configFields: entry.configFields ?? [],
+    connectionDefaults: entry.connectionDefaults ?? {},
+    systemDatabases: entry.systemDatabases ?? [],
   }
 }
 

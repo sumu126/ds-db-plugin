@@ -1,6 +1,7 @@
 /**
- * The four model-facing tools: list databases, list a database's tables,
- * describe one table, and run one read-only statement.
+ * The model-facing tools: list the saved connections, list databases, list a
+ * database's tables, describe a table, sample rows, explain a plan, and run one
+ * read-only statement.
  *
  * The tools are dialect-neutral: they ask the dialect for a query and for the
  * syntax they must judge and bound with, and they never write SQL, quote an
@@ -144,10 +145,10 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
           : value.databases.map(row => `${row.name} (${row.charset}/${row.collation})`).join('\n'),
       }],
     },
-    async execute(args) {
+    async execute(args, exec) {
       const { profile: target, view } = addressed(args.connection)
       requireCapability(view, 'databases')
-      const databases = await access.run(target, view.databases())
+      const databases = await access.run(target, view.databases(), exec.signal)
       const includeSystem = args.include_system === true
       const rows = view.capabilities.has('charset')
         ? databases
@@ -197,11 +198,11 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
           )].join('\n'),
       }],
     },
-    async execute(args) {
+    async execute(args, exec) {
       const { profile: target, view } = addressed(args.connection)
       requireCapability(view, 'tables')
       const database = resolveDatabase(target, args.database, view)
-      const tables = await access.run(target, view.tables(database))
+      const tables = await access.run(target, view.tables(database), exec.signal)
       // A server that cannot estimate row counts reports none rather than
       // letting its dialect invent a number the model would trust.
       const rows = view.capabilities.has('estimatedRows')
@@ -280,21 +281,21 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
         ].join('\n'),
       }],
     },
-    async execute(args) {
+    async execute(args, exec) {
       const { profile: target, view } = addressed(args.connection)
       requireCapability(view, 'columns')
       const database = resolveDatabase(target, args.database, view)
       const table = args.table.trim()
       if (table.length === 0) throw new Error('table must be a non-empty name')
-      const columns = await access.run(target, view.columns(database, table))
+      const columns = await access.run(target, view.columns(database, table), exec.signal)
       if (columns.length === 0) {
         throw new Error(`table ${database}.${table} does not exist or is not visible to this connection`)
       }
       const indexes = view.capabilities.has('indexes')
-        ? await access.run(target, view.indexes(database, table))
+        ? await access.run(target, view.indexes(database, table), exec.signal)
         : []
       const create = view.capabilities.has('createStatement')
-        ? await access.run(target, view.createStatement(database, table))
+        ? await access.run(target, view.createStatement(database, table), exec.signal)
         : []
       return {
         database,
@@ -343,11 +344,11 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
         }]
       },
     },
-    async execute(args) {
+    async execute(args, exec) {
       const { profile: target, view } = addressed(args.connection)
       const statement = assertReadOnlyStatement(args.sql, view.rules)
       // The row cap belongs to the connection that answers the call.
-      const outcome = await access.query(target, view.applyRowLimit(statement, target.maxRows))
+      const outcome = await access.query(target, view.applyRowLimit(statement, target.maxRows), [], exec.signal)
       return {
         columns: outcome.columns,
         rows: outcome.rows,
@@ -387,7 +388,7 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
           text: `${value.database}.${value.table}: ${JSON.stringify(value.rows)}`,
         }],
       },
-      async execute(args) {
+      async execute(args, exec) {
         const { profile: target, view } = addressed(args.connection)
         requireCapability(view, 'sample')
         const sample = view.sample
@@ -397,7 +398,7 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
         if (table.length === 0) throw new Error('table must be a non-empty name')
         const requested = typeof args.rows === 'number' ? Math.floor(args.rows) : 5
         const rows = Math.min(Math.max(requested, 1), target.maxRows)
-        const outcome = await access.query(target, sample(database, table, rows).statement.sql, [])
+        const outcome = await access.query(target, sample(database, table, rows).statement.sql, [], exec.signal)
         return { database, table, columns: outcome.columns, rows: outcome.rows }
       },
     }))
@@ -421,13 +422,13 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
         },
         render: (_args, value) => [{ type: 'text', text: value.plan.join('\n') }],
       },
-      async execute(args) {
+      async execute(args, exec) {
         const { profile: target, view } = addressed(args.connection)
         requireCapability(view, 'explain')
         const explain = view.explain
         if (explain === undefined) throw new Error(`this ${view.label} connection does not support explain`)
         const statement = assertReadOnlyStatement(args.sql, view.rules)
-        const plan = await access.run(target, explain(statement))
+        const plan = await access.run(target, explain(statement), exec.signal)
         return { plan }
       },
     }))

@@ -11,19 +11,21 @@
  * @module dsh-ds-db/src/connection
  */
 
+import { createHash } from 'node:crypto'
 import type { ConnectionProfile } from './contract.ts'
 import type { DatabaseConnection, DatabaseDialect, DialectQuery, DialectSession, DialectStatement } from './dialect.ts'
 import { toJsonRow, type DbRow, type DbScalar } from './value.ts'
 
 /**
- * Sessions one plugin instance keeps open at once.
+ * Sessions one plugin instance keeps open at once, unless the deployment
+ * configures another limit.
  *
  * Calls may address different connections in the same session, so a second
  * connection must not close the first one's session; beyond this many, the
  * least recently used is retired, so a page full of connections cannot hold an
  * unbounded number of pools open.
  */
-const SESSION_LIMIT = 4
+export const SESSION_LIMIT = 4
 
 /** One statement's outcome, already bounded and JSON-safe. */
 export interface QueryOutcome {
@@ -57,6 +59,11 @@ export interface DatabaseAccessFace {
    * @param profile - the connection the call addresses.
    */
   dialect: (profile: ConnectionProfile) => DatabaseDialect
+  /**
+   * Where a session that cannot drain is reported.
+   * @param message - what failed, in terms a deployment operator can act on.
+   */
+  warn: (message: string) => void
 }
 
 /** One open session and the identity it was opened for. */
@@ -80,7 +87,14 @@ function connectionLabel(connection: DatabaseConnection): string {
 /** The session identity: any change here retires the session it was opened for. */
 function sessionKey(connection: DatabaseConnection, dialect: DatabaseDialect): string {
   return JSON.stringify([
-    dialect.name, connection.host, connection.port, connection.user, connection.password, connection.database ?? '',
+    dialect.name,
+    connection.host,
+    connection.port,
+    connection.user,
+    // The password distinguishes identities but must not sit in a long-lived map
+    // key, so only a digest of it is kept.
+    createHash('sha256').update(connection.password).digest('hex').slice(0, 16),
+    connection.database ?? '',
   ])
 }
 
@@ -101,8 +115,14 @@ function messageOf(error: unknown): string {
 export class DatabaseAccess {
   private readonly sessions = new Map<string, LiveSession>()
 
-  /** @param face - the connection and dialect readers every call resolves through. */
-  constructor(private readonly face: DatabaseAccessFace) {}
+  /**
+   * @param face - the connection and dialect readers every call resolves through.
+   * @param sessionLimit - sessions to keep open at once; the least recently used is retired past it.
+   */
+  constructor(
+    private readonly face: DatabaseAccessFace,
+    private readonly sessionLimit: number = SESSION_LIMIT,
+  ) {}
 
   /**
    * Run one dialect query and project its rows onto the shape it promises.
@@ -111,9 +131,9 @@ export class DatabaseAccess {
    * @returns one entry per row the server answered.
    * @throws {Error} when the server refuses the statement or the session cannot reach it.
    */
-  async run<R>(profile: ConnectionProfile, query: DialectQuery<R>): Promise<R[]> {
+  async run<R>(profile: ConnectionProfile, query: DialectQuery<R>, signal?: AbortSignal): Promise<R[]> {
     const live = await this.session(profile)
-    const { rows } = await this.statement(live, query.statement)
+    const { rows } = await this.statement(live, query.statement, signal)
     return rows.map(row => query.project(row))
   }
 
@@ -125,9 +145,14 @@ export class DatabaseAccess {
    * @returns the bounded, JSON-safe outcome.
    * @throws {Error} when the server refuses the statement or the session cannot reach it.
    */
-  async query(profile: ConnectionProfile, sql: string, values: readonly DbScalar[] = []): Promise<QueryOutcome> {
+  async query(
+    profile: ConnectionProfile,
+    sql: string,
+    values: readonly DbScalar[] = [],
+    signal?: AbortSignal,
+  ): Promise<QueryOutcome> {
     const live = await this.session(profile)
-    const { rows, columns, elapsedMs } = await this.statement(live, { sql, values })
+    const { rows, columns, elapsedMs } = await this.statement(live, { sql, values }, signal)
     return {
       columns,
       rows: rows.slice(0, live.connection.maxRows),
@@ -181,13 +206,18 @@ export class DatabaseAccess {
 
   /** Close the least recently used session while the cache is over its limit. */
   private async retireOverflow(): Promise<void> {
-    while (this.sessions.size > SESSION_LIMIT) {
+    while (this.sessions.size > this.sessionLimit) {
       const oldestKey = this.sessions.keys().next().value
       if (oldestKey === undefined) return
       const oldest = this.sessions.get(oldestKey)
       this.sessions.delete(oldestKey)
       if (oldest !== undefined) await this.close(oldest, 'retiring the least recently used')
     }
+  }
+
+  /** Forget one session without closing it: a cancelled statement may already have ended it. */
+  private drop(live: LiveSession): void {
+    if (this.sessions.get(live.key) === live) this.sessions.delete(live.key)
   }
 
   /** Close one session, reporting a failure instead of letting it block the caller. */
@@ -197,7 +227,7 @@ export class DatabaseAccess {
     } catch (error: unknown) {
       // A session that cannot drain is already unusable, and nothing may block
       // an unload or the next call.
-      process.emitWarning(`ds-db: ${doing} the ${live.dialect.label} session failed: ${messageOf(error)}`)
+      this.face.warn(`${doing} the ${live.dialect.label} session failed: ${messageOf(error)}`)
     }
   }
 
@@ -205,12 +235,17 @@ export class DatabaseAccess {
   private async statement(
     live: LiveSession,
     statement: DialectStatement,
+    signal?: AbortSignal,
   ): Promise<{ rows: DbRow[], columns: string[], elapsedMs: number }> {
     const started = Date.now()
     let result: { rows: unknown[], columns: string[] }
     try {
-      result = await live.session.run(statement)
+      result = await live.session.run(signal === undefined ? statement : { ...statement, signal })
     } catch (error: unknown) {
+      // A cancelled statement may have ended the session it ran on — a driver
+      // without cancellation support is ended instead — so the cache drops it
+      // and the next call opens a fresh one.
+      if (signal?.aborted === true) this.drop(live)
       throw new Error(
         `${live.dialect.label} statement on ${connectionLabel(live.connection)} failed: ${messageOf(error)}`,
         { cause: error },

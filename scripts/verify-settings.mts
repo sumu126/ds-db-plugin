@@ -48,3 +48,8 @@ for (const connection of listed.connections) {
   assert.equal(Object.keys(connection).includes('passwordEnv'), false, 'no credential reference is listed')
 }
 console.log(`settings: ${listed.connections.length} connection(s) visible, default is "${listed.active}"`)
+
+// The settings service watches its file, and a watcher keeps the loop alive
+// after the plugin is disposed; the checks above are done, so the process ends
+// on its own terms rather than hanging the command.
+process.exit(0)

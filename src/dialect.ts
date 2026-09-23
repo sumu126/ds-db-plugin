@@ -102,6 +102,14 @@ export interface DialectStatement {
   readonly sql: string
   /** Values bound to that statement, in the same order. */
   readonly values: readonly DbScalar[]
+  /**
+   * The call's cancellation signal, when the caller has one.
+   *
+   * A dialect cancels as far as its driver allows: a driver that takes an
+   * `AbortSignal` forwards it, and one that does not ends the session instead —
+   * the runner then drops that session so the next call opens a fresh one.
+   */
+  readonly signal?: AbortSignal
 }
 
 /**

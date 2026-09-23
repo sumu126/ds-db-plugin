@@ -42,6 +42,7 @@
     "verify:settings": "node --import tsx/esm scripts/verify-settings.mts"
   },
   "dependencies": {
+    "clsx": "^2.1.1",
     "dsh-dialect-mysql": "file:dialects/mysql"
   },
   "peerDependencies": {

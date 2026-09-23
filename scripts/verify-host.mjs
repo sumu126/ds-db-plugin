@@ -22,6 +22,14 @@ import { MYSQL_DIALECT } from '../dialects/mysql/src/index.ts'
 const TOOL_NAMES = ['db_databases', 'db_tables', 'db_describe', 'db_query']
 
 /**
+ * The caller context the host builds for one tool call.
+ *
+ * Every tool reads `exec.signal`, so a call without it is not a call the host
+ * would ever make; a never-aborted signal is the faithful stand-in.
+ */
+const CALL = { signal: new AbortController().signal }
+
+/**
  * Assert one tool's result satisfies the output schema it declares.
  *
  * A real call validates this in the host, so a mismatch between a schema and
@@ -101,18 +109,18 @@ assert.equal(ctx.databaseDialects.get('mysql'), MYSQL_DIALECT)
 console.log(`dialect registry: ${ctx.databaseDialects.names().join(', ')}`)
 
 const query = ctx.tools.get('db_query')
-const write = await query.execute({ sql: 'DROP TABLE users' }, undefined).then(() => undefined, error => error)
+const write = await query.execute({ sql: 'DROP TABLE users' }, CALL).then(() => undefined, error => error)
 assert.ok(write instanceof Error, 'a write statement is refused')
 assert.match(write.message, /read-only/)
 console.log(`write refusal: ${write.message}`)
 
 const tables = ctx.tools.get('db_tables')
-const noDatabase = await tables.execute({}, undefined).then(() => undefined, error => error)
+const noDatabase = await tables.execute({}, CALL).then(() => undefined, error => error)
 assert.ok(noDatabase instanceof Error, 'no default database is an actionable refusal')
 assert.match(noDatabase.message, /no database selected/)
 console.log(`database refusal: ${noDatabase.message}`)
 
-const reach = await tables.execute({ database: 'app' }, undefined).then(() => undefined, error => error)
+const reach = await tables.execute({ database: 'app' }, CALL).then(() => undefined, error => error)
 assert.ok(reach instanceof Error, 'an unreachable server fails the call')
 // The refusal names the connection it used, so a model can act on it.
 assert.match(reach.message, /MySQL statement on nobody@127\.0\.0\.1:1 failed: connect ECONNREFUSED/)
@@ -122,7 +130,7 @@ console.log(`connection refusal: ${reach.message}`)
 // what is registered, rather than by a load that cannot know about later layers.
 const second = await mount({ ...UNREACHABLE, dialect: 'postgres' })
 assert.deepEqual(second.databaseDialects.names(), ['mysql'], 'the mounted dialect package is still registered')
-const unresolved = await second.tools.get('db_tables').execute({ database: 'app' }, undefined)
+const unresolved = await second.tools.get('db_tables').execute({ database: 'app' }, CALL)
   .then(() => undefined, error => error)
 assert.ok(unresolved instanceof Error, 'an unregistered dialect fails the call')
 assert.match(unresolved.message, /database dialect "postgres" is not registered; registered dialects: mysql/)
@@ -159,6 +167,9 @@ function standInDialect(label, version) {
     async open() {
       return {
         async run(statement) {
+          // A stand-in that honours the signal proves the tools forward it: if
+          // they did not, a cancelled call would run to completion instead.
+          if (statement.signal?.aborted === true) throw new Error('the call was cancelled')
           seen.sql = statement.sql
           return { rows: rowsFor(statement.sql), columns: [] }
         },
@@ -190,7 +201,7 @@ function standInDialect(label, version) {
 // A dialect that arrives after this plugin — the shape a separately packaged
 // dialect has, since the registry is provided here — runs every call after it.
 const dispose = second.databaseDialects.register(standInDialect('PostgreSQL', '16.3'))
-const listed = await second.tools.get('db_tables').execute({ database: 'app' }, undefined)
+const listed = await second.tools.get('db_tables').execute({ database: 'app' }, CALL)
 assert.deepEqual(listed, {
   database: 'app',
   tables: [{ name: 'events', type: 'BASE TABLE', engine: null, estimatedRows: null, comment: '' }],
@@ -200,18 +211,29 @@ console.log(`second dialect ran the tools: ${JSON.stringify(listed)}`)
 
 // Its own statement, projection, and syntax win over the ones this plugin was
 // registered with: the bound below is spelled the second dialect's way.
-const databases = await second.tools.get('db_databases').execute({}, undefined)
+const databases = await second.tools.get('db_databases').execute({}, CALL)
 assert.deepEqual(databases, { databases: [{ name: 'app', charset: '', collation: '' }] })
 assertOutput(second, 'db_databases', databases)
-const bounded = await second.tools.get('db_query').execute({ sql: 'SELECT 1' }, undefined)
+const bounded = await second.tools.get('db_query').execute({ sql: 'SELECT 1' }, CALL)
 assert.match(seen.sql, /FETCH FIRST 201 ROWS ONLY/, 'the second dialect bounded the statement')
 assert.equal(bounded.rowCount, 0)
 assertOutput(second, 'db_query', bounded)
 console.log(`second dialect bounded a query: ${JSON.stringify(seen.sql)}`)
 
+// The call's cancellation reaches the dialect, so a long statement ends with
+// the caller's signal rather than running out its timeout.
+const cancelled = new AbortController()
+cancelled.abort()
+const aborted = await second.tools.get('db_query')
+  .execute({ sql: 'SELECT 1' }, { signal: cancelled.signal })
+  .then(() => undefined, error => error)
+assert.ok(aborted instanceof Error, 'a cancelled call fails instead of running')
+assert.match(aborted.message, /cancelled/)
+console.log(`cancellation: ${aborted.message}`)
+
 // A dialect that cannot produce a create statement omits the field: the seam
 // degrades instead of running a statement the server does not have.
-const described = await second.tools.get('db_describe').execute({ database: 'app', table: 'events' }, undefined)
+const described = await second.tools.get('db_describe').execute({ database: 'app', table: 'events' }, CALL)
 assert.equal(described.createStatement, undefined, 'a dialect without createStatement omits it')
 assert.equal(described.table, 'events')
 assertOutput(second, 'db_describe', described)
@@ -236,7 +258,7 @@ console.log(`dialect catalog: installed ${catalog.installed.map(entry => entry.n
 
 // Registration is an effect: disposing it takes the dialect away again.
 dispose()
-const gone = await second.tools.get('db_tables').execute({ database: 'app' }, undefined)
+const gone = await second.tools.get('db_tables').execute({ database: 'app' }, CALL)
   .then(() => undefined, error => error)
 assert.match(gone.message, /database dialect "postgres" is not registered/)
 console.log('dialect disposal: the registered dialect is gone again')
@@ -250,26 +272,26 @@ const third = await mount({
   ],
   activeId: 'b',
 })
-const picked = await third.tools.get('db_tables').execute({ database: 'app' }, undefined)
+const picked = await third.tools.get('db_tables').execute({ database: 'app' }, CALL)
   .then(() => undefined, error => error)
 assert.ok(picked instanceof Error, 'the active connection is what the call reaches')
 assert.match(picked.message, /b@10\.0\.0\.2:1/, 'the tools addressed the active connection, not the first')
 console.log('active connection: the tools addressed b@10.0.0.2:1')
 
 // A call may address any saved connection by name, not only the default one.
-const byName = await third.tools.get('db_tables').execute({ database: 'app', connection: 'A' }, undefined)
+const byName = await third.tools.get('db_tables').execute({ database: 'app', connection: 'A' }, CALL)
   .then(() => undefined, error => error)
 assert.match(byName.message, /a@10\.0\.0\.1:1/, 'naming a connection addressed that one')
 console.log(`named connection: ${byName.message}`)
 
 // A name nothing carries is refused, and the refusal lists what is saved.
-const unknown = await third.tools.get('db_tables').execute({ database: 'app', connection: 'nope' }, undefined)
+const unknown = await third.tools.get('db_tables').execute({ database: 'app', connection: 'nope' }, CALL)
   .then(() => undefined, error => error)
 assert.match(unknown.message, /no saved connection is named "nope"; saved connections: A, B/)
 console.log(`unknown connection: ${unknown.message}`)
 
 // The listing is how a model discovers the names it can address.
-const savedConnections = await third.tools.get('db_connections').execute({}, undefined)
+const savedConnections = await third.tools.get('db_connections').execute({}, CALL)
 assert.deepEqual(savedConnections.connections.map(connection => connection.name), ['A', 'B'])
 assert.equal(savedConnections.active, 'B', 'the listing names the default connection')
 // A listing a model reads carries no credential reference, only where it reaches.
@@ -284,7 +306,7 @@ console.log(`connections: ${savedConnections.active} is the default of ${savedCo
 // listing reports the port the connection really reaches rather than the 0 the
 // document carries.
 const unsetPort = await mount({ host: '127.0.0.1', user: 'nobody', database: '' })
-const listedUnset = await unsetPort.tools.get('db_connections').execute({}, undefined)
+const listedUnset = await unsetPort.tools.get('db_connections').execute({}, CALL)
 assertOutput(unsetPort, 'db_connections', listedUnset)
 assert.equal(listedUnset.connections[0].port, 3306, 'an unset port reports the dialect default')
 assert.equal(listedUnset.connections[0].host, '127.0.0.1')

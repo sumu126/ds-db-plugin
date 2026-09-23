@@ -139,6 +139,10 @@ dsh --profile demo
             maxRows: 200
             extra: {}          # 该方言专属字段
         activeId: app
+        # 工具注册等待方言包就绪的上限（毫秒）；超时后用兜底事实注册，调用会报出未注册的方言
+        dialectWaitMs: 100
+        # 同时保持打开的会话数（按连接身份计），超出后关闭最久未用的一条
+        sessionLimit: 4
 ```
 
 补丁按行整块替换 `config`，覆盖时请写全要保留的键。
@@ -289,7 +293,7 @@ cd ../deepseek-harness
 pnpm dsh web --patch <插件目录>/.dev/cordis.yml
 ```
 
-`verify:host` 与源码态启动都依赖同 checkout 旁的 `deepseek-harness`（`tsconfig.json` 的 `paths` 把 `@deepseek-ai/*` 指过去），换机器需同步调整 `paths`。
+`tsconfig.json` 与 `tsconfig.types.json` 里的 `../deepseek-harness/...` 是**开发期约定**：`typecheck`、`test`、`verify:host`、`verify:settings` 需要旁边有一份 harness checkout，换机器要同步调整这些 `paths`。**`npm run build` 与用户安装不受影响**——产物里的 harness 依赖是外部的，由宿主提供。
 
 改动落在哪一层：
 
@@ -307,7 +311,7 @@ pnpm dsh web --patch <插件目录>/.dev/cordis.yml
 - **随主包分发的方言只有 `dsh-dialect-mysql`**：它和第三方方言形状完全一致，只是被核心的 bundle 层与 `dependencies` 一起带上。PostgreSQL 与 Oracle 都还没有实现——加 PostgreSQL 便宜（`information_schema` 大体可移植、`?`→`$n` 是机械替换），加 Oracle 贵（无 `LIMIT`、无 `information_schema`、SID 与 service name 两种连法、`oracledb` 是重量级原生依赖）。两者都可以照 `dialects/_template` 起手，并参考 `dialects/mysql` 的完整实现
 - **打包版 dsh 上的 `dsh plugin add` 安装实测未完成**：声明已补齐，缺真实打包环境验证
 - **配置字段是「通用字段 + `extra`」**：Oracle 这类需要 service name 的库可以表达；但 SQLite 这类没有 host/port 概念的库仍会看到多余字段，届时升级为「字段完全由方言声明」（见 [`docs/05_Docs/decisions/`](docs/05_Docs/decisions/)）
-- **客户端字典命名空间与部分内部标识符仍带 MySQL 字样**：工具名（`db_*`）、设置命名空间（`ds-db`）、路由（`/api/ds-db/*`）都已中立；字典命名空间 `settings.mysql` 与若干 TS 标识符不对外暴露，改名属纯内部重构
+- **命名已全中立**：工具名（`db_*`）、设置命名空间（`ds-db`）、路由（`/api/ds-db/*`）、字典命名空间（`settings.db`）、默认凭据引用（`DSH_DB_PASSWORD`）都不含数据库类型字样；带 `MYSQL_*` 的标识符只出现在 `dsh-dialect-mysql` 包内——那是这个方言自己的名字
 - **没有查询结果卡片与调用卡片**：工具结果走通用呈现
 - **浏览器半边需要重新构建**：改 `src/client` 后必须 `npm run build`
 - 作为仓外插件，它不参与 `deepseek-harness` 仓库的 gate（每文件 100% 覆盖率等）；`typecheck`、`npm test`、`verify:host` 是本工程自带的检查
