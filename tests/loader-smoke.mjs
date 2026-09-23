@@ -84,6 +84,11 @@ const ctx = new Context()
 ctx.baseUrl = pathToFileURL(home).href + '/'
 await ctx.plugin(Loader)
 ctx.loader.builtins.include = Include
+// `loader.internal` is the Loader's own module-resolution seam, and its shape
+// (`{ version, import }`) belongs to the harness: this stand-in follows whatever
+// generation the Loader in use declares, so a harness upgrade can require an
+// update here. It replaces only the three harness services the composition
+// names; this repository's two rows are resolved by their file URLs.
 ctx.loader.internal = {
   version: 'v2',
   // The harness packages are reached by name; the two rows this repository ships

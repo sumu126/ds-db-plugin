@@ -11,6 +11,7 @@
  *   npm run verify:settings
  */
 import { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-settings'
 import SettingsFile from '@deepseek-ai/dsh-settings-file'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
@@ -35,13 +36,15 @@ for (const connection of listed.connections) {
   console.log(`- ${connection.name} [${connection.dialect || 'first dialect'}] ${connection.host}:${connection.port}/${connection.database}${connection.active ? ' (default)' : ''}`)
 }
 
-// What this guard can assert on any machine: the tool answers, the listing
-// carries the fields a model addresses connections by, and it never carries a
-// credential reference. Whether the count matches the user's document is for a
-// human to read off the lines above — a tool pinned to the composition entry
-// would print one connection where the user saved several, which is exactly the
-// failure this check exists for.
-assert.ok(listed.connections.length >= 1, 'the composition entry alone yields at least one connection')
+// The listing has to agree with the section the provider serves. A tool pinned
+// to the composition entry would report one connection while the user saved
+// several, which is exactly the failure this check exists for; a machine with no
+// settings document yet falls back to the tool's own count.
+const section = ctx.settings?.section(plugin.DB_SETTINGS_NAMESPACE) as { connections?: unknown[] } | undefined
+const saved = section?.connections?.length ?? listed.connections.length
+assert.equal(listed.connections.length, saved, 'every connection the settings section holds is visible to the tools')
+
+assert.ok(listed.connections.length >= 1, 'a deployment with a composition entry has at least one connection')
 assert.ok(listed.active.length > 0, 'a default connection is named')
 for (const connection of listed.connections) {
   assert.ok(connection.name.length > 0, 'every connection is named')

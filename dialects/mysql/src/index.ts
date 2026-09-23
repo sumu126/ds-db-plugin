@@ -122,6 +122,9 @@ class MysqlSession implements DialectSession {
    */
   constructor(private readonly pool: Pool, private readonly queryTimeoutMs: number) {}
 
+  /** Whether the pool has been ended, so it is ended exactly once. */
+  private ended = false
+
   /**
    * Run one statement on the pool.
    * @param query - the statement and its bound values.
@@ -134,7 +137,7 @@ class MysqlSession implements DialectSession {
     // mysql2 takes no AbortSignal, so cancellation ends the pool instead. The
     // session is unusable afterwards, which is why the runner drops it from its
     // cache and the next call opens a fresh one.
-    const cancel = (): void => { void this.pool.end().catch(() => {}) }
+    const cancel = (): void => { void this.end() }
     signal?.addEventListener('abort', cancel, { once: true })
     try {
       const [rows, fields] = await this.pool.query({
@@ -151,7 +154,22 @@ class MysqlSession implements DialectSession {
 
   /** Close the pool. */
   async close(): Promise<void> {
-    await this.pool.end()
+    await this.end()
+  }
+
+  /**
+   * End the pool once.
+   *
+   * A cancelled statement ends the pool to interrupt it, and the runner then
+   * drops that session and asks it to close — the second call must not be a
+   * second `end()` on a pool that is already gone.
+   */
+  private async end(): Promise<void> {
+    if (this.ended) return
+    this.ended = true
+    await this.pool.end().catch(() => {
+      // Ending an already-broken pool is the outcome this wanted anyway.
+    })
   }
 }
 

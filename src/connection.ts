@@ -76,6 +76,14 @@ interface LiveSession {
   connection: DatabaseConnection
   /** The dialect's session. */
   session: DialectSession
+  /**
+   * Set while the session is being closed, so it is closed exactly once.
+   *
+   * A cancelled statement and its disposal can both want to close the same
+   * session, and a dialect that already ended its own session must not be asked
+   * to end it twice.
+   */
+  closing?: Promise<void>
 }
 
 /** A connection name safe to show a model and a log: never the password. */
@@ -164,13 +172,15 @@ export class DatabaseAccess {
   /**
    * Prove one saved connection works, for the settings page.
    * @param profile - the saved connection to probe.
+   * @param signal - the caller's cancellation, so a probe the page no longer
+   * waits for ends instead of holding a session until its timeout.
    * @returns the server version and the probe's round trip time.
    * @throws {Error} when the connection fails or the server answers no version.
    */
-  async probe(profile: ConnectionProfile): Promise<ConnectionProbe> {
+  async probe(profile: ConnectionProfile, signal?: AbortSignal): Promise<ConnectionProbe> {
     const live = await this.session(profile)
     const started = Date.now()
-    const versions = await this.run(profile, live.dialect.version())
+    const versions = await this.run(profile, live.dialect.version(), signal)
     const version = versions[0]
     if (version === undefined || version.length === 0) {
       throw new Error(`the server did not answer a version for ${connectionLabel(live.connection)}`)
@@ -215,20 +225,37 @@ export class DatabaseAccess {
     }
   }
 
-  /** Forget one session without closing it: a cancelled statement may already have ended it. */
+  /**
+   * Forget one session and close it.
+   *
+   * A cancelled statement may have ended the session it ran on — a driver with
+   * no cancellation of its own is ended instead — but it may just as well have
+   * survived it, so dropping without closing would leak a pool that is in no
+   * cache and that `dispose` no longer sees. `close` is idempotent, so this
+   * either ends the session now or finds it already ending.
+   */
   private drop(live: LiveSession): void {
-    if (this.sessions.get(live.key) === live) this.sessions.delete(live.key)
+    if (this.sessions.get(live.key) !== live) return
+    this.sessions.delete(live.key)
+    void this.close(live, 'dropping a cancelled session')
   }
 
-  /** Close one session, reporting a failure instead of letting it block the caller. */
+  /** Close one session exactly once, reporting a failure instead of letting it block the caller. */
   private async close(live: LiveSession, doing: string): Promise<void> {
-    try {
-      await live.session.close()
-    } catch (error: unknown) {
-      // A session that cannot drain is already unusable, and nothing may block
-      // an unload or the next call.
-      this.face.warn(`${doing} the ${live.dialect.label} session failed: ${messageOf(error)}`)
+    if (live.closing !== undefined) {
+      await live.closing
+      return
     }
+    live.closing = (async () => {
+      try {
+        await live.session.close()
+      } catch (error: unknown) {
+        // A session that cannot drain is already unusable, and nothing may block
+        // an unload or the next call.
+        this.face.warn(`${doing} the ${live.dialect.label} session failed: ${messageOf(error)}`)
+      }
+    })()
+    await live.closing
   }
 
   /** Run one statement on a live session, wrapping any refusal with the connection it names. */

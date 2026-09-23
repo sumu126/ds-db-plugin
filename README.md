@@ -279,12 +279,22 @@ cd <你的方言目录> && git init && npm run verify && npm publish
 
 ```sh
 pnpm install --no-frozen-lockfile   # 或 npm install --legacy-peer-deps
-npm run typecheck      # 核心 + 各方言包（harness 依赖按其 .d.ts 解析）
-npm test               # 方言包的行为测试与契约审计（24 例）
-npm run verify:host    # 挂真实 ToolRuntime：方言以独立插件挂载后跑通全部断言
-npm run build          # 核心 + 浏览器半边 + 每个方言包
-npm run overlay        # 生成 .dev/cordis.yml（两行：方言包 + 核心）
+npm run typecheck         # 核心 + 各方言包（harness 依赖按其 .d.ts 解析）
+npm test                  # 方言包的行为测试与契约审计（24 例）
+npm run verify:host       # 挂真实 ToolRuntime：方言以独立插件挂载后跑通全部断言
+npm run verify:settings   # 挂真实设置服务：工具读到的是用户保存的文档，而非组合兜底
+npm run verify:loader     # 经 Loader + 真实 cordis.yml 组装：加载、注入、卸载
+npm run build             # 核心 + 浏览器半边 + 每个方言包
+npm run overlay           # 生成 .dev/cordis.yml（两行：方言包 + 核心）
 ```
+
+三道 `verify` 各自覆盖不同的一半，缺一道就有一类错误能长期隐身：
+
+| 检查 | 挂什么 | 抓什么 |
+| --- | --- | --- |
+| `verify:host` | 真实 ToolRuntime，**无**设置服务 | 工具注册、描述与拒绝文本、能力降级、多连接寻址、取消 |
+| `verify:settings` | + 真实设置服务与 `~/.dsh/settings.yaml` | 工具读到的是**用户文档**而不是组合兜底 |
+| `verify:loader` | 真实 Loader + 一次性 `DSH_HOME` 的 `cordis.yml` | 组合本身：行能否解析、注入是否满足、卸载是否干净 |
 
 启动冒烟：
 
@@ -293,7 +303,7 @@ cd ../deepseek-harness
 pnpm dsh web --patch <插件目录>/.dev/cordis.yml
 ```
 
-`tsconfig.json` 与 `tsconfig.types.json` 里的 `../deepseek-harness/...` 是**开发期约定**：`typecheck`、`test`、`verify:host`、`verify:settings` 需要旁边有一份 harness checkout，换机器要同步调整这些 `paths`。**`npm run build` 与用户安装不受影响**——产物里的 harness 依赖是外部的，由宿主提供。
+`tsconfig.json` 与 `tsconfig.types.json` 里的 `../deepseek-harness/...` 是**开发期约定**：`typecheck`、`test`、`verify:host`、`verify:settings`、`verify:loader` 都需要旁边有一份 harness checkout，换机器要同步调整这些 `paths`。**`npm run build` 与用户安装不受影响**——产物里的 harness 依赖是外部的，由宿主提供。
 
 改动落在哪一层：
 
@@ -318,7 +328,7 @@ pnpm dsh web --patch <插件目录>/.dev/cordis.yml
 - **远程调用面走低层通道——有意偏离**：设置页用 `connection.fetch.register` 的自定义路由 + 裸 `fetch`，而不是 Typert `@Remote`（第一方 `file-upload`、`session-log-export` 是同款用法）。原因是**仓外插件无法运行仓内的 typert 生成管线**（需要 `./typert`、`./remote` 产物与 generator 参与构建）。代价是失去生成类型与统一失败词汇，`contract.ts` 里的 wire 形状是手写的——客户端因此必须自己补齐字段（`completeDescriptor`）。**触发条件**：插件进入第一方仓库，或 typert 提供面向仓外插件的生成入口。
 - **没有查询结果卡片与调用卡片**：工具结果走通用呈现
 - **浏览器半边需要重新构建**：改 `src/client` 后必须 `npm run build`
-- 作为仓外插件，它不参与 `deepseek-harness` 仓库的 gate（每文件 100% 覆盖率等）；`typecheck`、`npm test`、`verify:host` 是本工程自带的检查
+- 作为仓外插件，它不参与 `deepseek-harness` 仓库的 gate（每文件 100% 覆盖率等）；`typecheck`、`npm test`、`verify:host`、`verify:settings`、`verify:loader` 是本工程自带的检查
 
 ## 许可
 

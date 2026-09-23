@@ -146,6 +146,8 @@ const seen = { sql: '' }
  * below discriminate this dialect from MySQL's.
  */
 function standInDialect(label, version) {
+  /** Sessions opened and closed by this stand-in, so a check can tell reuse from reopen. */
+  const state = { opens: 0, closes: 0 }
   const query = (sql, project) => ({ statement: { sql, values: [] }, project })
   const rowsFor = (sql) => {
     if (sql.includes('pg_database')) return [{ name: 'app' }]
@@ -164,16 +166,32 @@ function standInDialect(label, version) {
     configFields: [{ key: 'serviceName', kind: 'text', default: 'ORCL', required: true, label: 'Service name' }],
     rowBoundHint: 'FETCH FIRST',
     systemDatabases: [],
+    // Counted so a check can tell a reused session from a reopened one, and a
+    // closed session from one merely forgotten.
+    state,
     async open() {
+      state.opens += 1
       return {
         async run(statement) {
           // A stand-in that honours the signal proves the tools forward it: if
           // they did not, a cancelled call would run to completion instead.
           if (statement.signal?.aborted === true) throw new Error('the call was cancelled')
+          // A statement the checks hold open, so a cancellation can arrive while
+          // it is in flight rather than before it starts — the two take
+          // different paths through the runner.
+          if (statement.sql.includes('slow')) {
+            await new Promise((resolve, reject) => {
+              const timer = setTimeout(resolve, 5000)
+              statement.signal?.addEventListener('abort', () => {
+                clearTimeout(timer)
+                reject(new Error('the call was cancelled in flight'))
+              }, { once: true })
+            })
+          }
           seen.sql = statement.sql
           return { rows: rowsFor(statement.sql), columns: [] }
         },
-        async close() {},
+        async close() { state.closes += 1 },
       }
     },
     applyRowLimit: (sql, maxRows) => `${sql}\nFETCH FIRST ${maxRows + 1} ROWS ONLY`,
@@ -200,7 +218,8 @@ function standInDialect(label, version) {
 
 // A dialect that arrives after this plugin — the shape a separately packaged
 // dialect has, since the registry is provided here — runs every call after it.
-const dispose = second.databaseDialects.register(standInDialect('PostgreSQL', '16.3'))
+const postgres = standInDialect('PostgreSQL', '16.3')
+const dispose = second.databaseDialects.register(postgres)
 const listed = await second.tools.get('db_tables').execute({ database: 'app' }, CALL)
 assert.deepEqual(listed, {
   database: 'app',
@@ -230,6 +249,29 @@ const aborted = await second.tools.get('db_query')
 assert.ok(aborted instanceof Error, 'a cancelled call fails instead of running')
 assert.match(aborted.message, /cancelled/)
 console.log(`cancellation: ${aborted.message}`)
+
+// Cancelling a call that is already in flight takes the other path: the session
+// may survive the cancellation — a driver that honours the signal leaves its
+// connection usable — so it has to be closed, not merely dropped. A dropped
+// session sits in no cache and `dispose` no longer sees it, which is a pool
+// leaked for the life of the process.
+const closesBefore = postgres.state.closes
+const inFlight = new AbortController()
+const pending = second.tools.get('db_query').execute({ sql: 'SELECT slow' }, { signal: inFlight.signal })
+await new Promise(resolve => setTimeout(resolve, 20))
+inFlight.abort()
+const cancelledInFlight = await pending.then(() => undefined, error => error)
+assert.ok(cancelledInFlight instanceof Error, 'a call cancelled in flight fails')
+assert.match(cancelledInFlight.message, /cancelled in flight/)
+assert.equal(postgres.state.closes, closesBefore + 1, 'the cancelled session was closed, not only forgotten')
+
+// And the next call opens a fresh session rather than reusing the cancelled one:
+// the cancelled session was dropped from the cache as well as closed.
+const opensAfterCancel = postgres.state.opens
+const afterCancel = await second.tools.get('db_query').execute({ sql: 'SELECT 1' }, CALL)
+assert.equal(postgres.state.opens, opensAfterCancel + 1, 'the next call opened a new session')
+assertOutput(second, 'db_query', afterCancel)
+console.log(`cancellation in flight: session closed, next call reopened (${String(postgres.state.opens)} opens)`)
 
 // A dialect that cannot produce a create statement omits the field: the seam
 // degrades instead of running a statement the server does not have.

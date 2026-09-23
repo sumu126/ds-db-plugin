@@ -303,7 +303,7 @@ async function probeRoute(
     if (profile === undefined) {
       return { ok: false, message: `connection "${body.id ?? ''}" is not saved` }
     }
-    return await probeProfile(ctx, registry, profile)
+    return await probeProfile(ctx, registry, profile, request.signal)
   } catch (error: unknown) {
     return { ok: false, message: error instanceof Error ? error.message : String(error) }
   }
@@ -315,12 +315,15 @@ async function probeRoute(
  * @param ctx - the plugin context, for the credential store.
  * @param registry - the dialect registry, read for the profile's dialect.
  * @param profile - the connection to probe.
+ * @param signal - the request's cancellation, so a page that navigated away
+ * stops waiting on the server rather than holding a session until the timeout.
  * @returns the probe payload; a refusal is a value, not a failed response.
  */
 async function probeProfile(
   ctx: Context,
   registry: DatabaseDialectRegistry,
   profile: ConnectionProfile,
+  signal?: AbortSignal,
 ): Promise<ProbePayload> {
   try {
     const dialect = resolveDialect(registry, profile.dialect)
@@ -331,7 +334,7 @@ async function probeProfile(
       warn: (message) => { ctx.logger.warn(message) },
     })
     try {
-      const probe = await access.probe(profile)
+      const probe = await access.probe(profile, signal)
       return { ok: true, version: probe.version, latencyMs: probe.latencyMs }
     } finally {
       await access.dispose()

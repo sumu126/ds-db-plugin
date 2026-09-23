@@ -76,19 +76,16 @@ export function apply(ctx: ClientContext): void {
 }
 
 /**
- * Read the database types the page may offer from the plugin's own
- * authenticated API route.
- * @returns the catalog; a transport failure yields an empty one, which the
- * chooser renders as nothing to pick rather than a broken dialog.
- */
-/**
- * Read the catalog over the plugin's own route.
+ * Read the database types the page may offer over the plugin's own route.
  *
  * A plain `fetch` rather than `ctx.remote.<ns>.<method>()`: the remote surface
  * comes from a generator this repository does not run, so the two endpoints are
  * HTTP routes on the authenticated `/api` channel (see the README's known
  * limitations). The consequence is visible right below — the answer is
  * completed field by field instead of arriving as a generated type.
+ *
+ * @returns the catalog; a transport failure yields an empty one, which the
+ * chooser renders as nothing to pick rather than a broken dialog.
  */
 async function loadCatalog(): Promise<DialectCatalog> {
   try {
@@ -108,10 +105,13 @@ async function loadCatalog(): Promise<DialectCatalog> {
 
 /**
  * One descriptor with the fields a Host may not have sent filled in.
+ *
+ * The parameter is honest about that: the route's answer is trusted for the one
+ * field a descriptor cannot do without, and every other field is filled here.
  * @param entry - what the catalog route answered with.
  * @returns a descriptor the page can read without guarding every field.
  */
-function completeDescriptor(entry: DialectDescriptor): DialectDescriptor {
+function completeDescriptor(entry: Partial<DialectDescriptor> & { name: string }): DialectDescriptor {
   return {
     name: entry.name,
     label: entry.label ?? entry.name,
