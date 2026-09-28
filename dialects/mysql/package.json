@@ -1,6 +1,7 @@
 {
   "name": "dsh-dialect-mysql",
   "version": "0.1.0",
+  "private": true,
   "description": "MySQL dialect for dsh-ds-db: registers the `mysql` type so the plugin's read-only tools, settings page, and type chooser work against MySQL.",
   "type": "module",
   "main": "lib/index.js",
