@@ -8,9 +8,6 @@ importers:
 
   .:
     dependencies:
-      clsx:
-        specifier: ^2.1.1
-        version: 2.1.1
       dsh-dialect-mysql:
         specifier: workspace:^
         version: link:dialects/mysql
@@ -21,6 +18,9 @@ importers:
       '@types/react':
         specifier: ^18.3.31
         version: 18.3.31
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
       esbuild:
         specifier: ^0.25.0
         version: 0.25.0
