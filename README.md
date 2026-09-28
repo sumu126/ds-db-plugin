@@ -90,7 +90,7 @@ pnpm install --no-frozen-lockfile      # 必须 pnpm：方言依赖用 workspace
 npm run build                          # 产出 lib/index.js（host）、lib/client.js（浏览器半边）与 lib/types/**（类型声明；旁边没有已构建的 harness 时这一步自动跳过，见「给插件开发者」）
 ```
 
-> **必须用 pnpm。** `dsh-dialect-mysql` 以 `workspace:^` 声明——本地是同仓链接，发布时由 pnpm 改写成版本号，一份声明两用；npm 会直接以 `EUNSUPPORTEDPROTOCOL "workspace:"` 拒绝。
+> **必须用 pnpm。** `dsh-dialect-mysql` 以 `workspace:^` 声明——本地是同仓链接，发布时由 pnpm 改写成版本号，一份声明两用；npm 会直接以 `EUNSUPPORTEDPROTOCOL "workspace:"` 拒绝。注意改写**只发生在 `pnpm pack` / `pnpm publish`**：从 git URL 安装（`dsh plugin add github:sumu126/ds-db-plugin`、`pnpm add git+https://…`）拿到的是原样清单，会以 `ERR_PNPM_WORKSPACE_PKG_NOT_FOUND` 失败（**已复现**）——方言包在消费者侧的工作区里不可见。git-URL 形态要能用，得先把两个包都发到 registry；在那之前从仓库装载只有 A（clone + `--patch`）与 B（pack 成 tgz 装进 profile）两条路。
 >
 > 仓库根还有一条相关配置：`pnpm-workspace.yaml` 里的 `autoInstallPeers: false`。本插件声明的 `@deepseek-ai/*` 全是**宿主运行时提供**的 optional peer，它们没有发布到 npm，包管理器去装只会失败——这条配置就是把这个默认行为关掉。
 
@@ -332,6 +332,7 @@ cd <你的方言目录> && git init && npm run verify && npm publish
 | 现象 | 原因 |
 | --- | --- |
 | `npm install` 报 `EUNSUPPORTEDPROTOCOL "workspace:"` | 依赖用 `workspace:` 声明，只能用 pnpm 装（发布产物里已被改写成版本号） |
+| git-URL 安装报 `ERR_PNPM_WORKSPACE_PKG_NOT_FOUND: dsh-dialect-mysql` | pnpm 对 git 依赖**不改写** `workspace:`（只有 pack/publish 改写），装进 profile 的工作区后找不到这个包。发 registry 前不支持 git-URL 安装——走 A（`--patch`）或 B（tgz + overrides） |
 | `pnpm install` 一直重试解析 `@deepseek-ai/dsh-*` | 那些是宿主提供的 optional peer，仓库已用 `autoInstallPeers: false` 关掉自动安装；仍出现说明你不在本仓库根目录 |
 | 调用报「dialect X is not registered」 | 你的包没被加载；用 `dsh --dump-config` 确认那一层在 |
 | 工具描述里还是旧的自称 | 已知行为：描述注册时写定，重载后更新；**调用不受影响** |
@@ -505,7 +506,7 @@ pnpm install --frozen-lockfile                                             # 一
 
 - **破坏性变更：多连接改造之前的用户文档不再被读取**。设置页保存的连接从「平铺字段」改成了 `connections[]`，旧文档里的 `ds-db.host` / `port` / `user` 等键不在当前 schema 内，会被静默丢弃，工具回落到组合层的默认连接（`127.0.0.1:3306`），需要在新设置页重录一条。这是有意接受的取舍：改造当时两个包都未发布（`npm view dsh-ds-db` / `dsh-dialect-mysql` 均 404），不存在持有旧文档的外部用户，为不存在的安装基础永久保留一条兼容读取路径不划算。组合层（`cordis.yml`）的平铺字段**不受影响**，仍然兼容。
 - **只有 MySQL 一个方言包**：它和第三方方言形状完全一致，只是被核心的 bundle 层与 `dependencies` 一起带上。PostgreSQL 与 Oracle 都还没有实现——加 PostgreSQL 便宜（`information_schema` 大体可移植、`?`→`$n` 是机械替换），加 Oracle 贵（无 `LIMIT`、无 `information_schema`、SID 与 service name 两种连法、`oracledb` 是重量级原生依赖）。两者都可以照 `dialects/_template` 起手，并参考 `dialects/mysql` 的完整实现
-- **registry 安装仍待发布**：`dsh-dialect-mysql` 以 `workspace:^` 声明，只有 `pnpm pack` / `pnpm publish` 会把它改写成版本号（**已实测**：`npm pack` 的产物里原样保留 `workspace:^`，消费者装不上；`pnpm pack` 的产物是 `^0.1.0`）。tarball 形态的安装**已验证**（见[安装进 profile](#b-安装进-profile可安装包形态)：`--dump-config` 两行都在、profile 启动后方言与四个工具都注册成功），只是需要那条 `overrides`——`dsh plugin --profile demo add dsh-ds-db` 一条命令的形式要等两个包都发布到 registry
+- **registry 安装仍待发布**：`dsh-dialect-mysql` 以 `workspace:^` 声明，只有 `pnpm pack` / `pnpm publish` 会把它改写成版本号（**已实测**：`npm pack` 的产物里原样保留 `workspace:^`，消费者装不上；`pnpm pack` 的产物是 `^0.1.0`）。tarball 形态的安装**已验证**（见[安装进 profile](#b-安装进-profile可安装包形态)：`--dump-config` 两行都在、profile 启动后方言与四个工具都注册成功），只是需要那条 `overrides`——`dsh plugin --profile demo add dsh-ds-db` 一条命令的形式要等两个包都发布到 registry。同一根因也挡住了 **git-URL 安装**（`dsh plugin add github:…` 报 `ERR_PNPM_WORKSPACE_PKG_NOT_FOUND`，已复现）：pnpm 不改写 git 依赖清单里的 `workspace:`
 - **配置字段是「通用字段 + `extra`」**：Oracle 这类需要 service name 的库可以表达；但 SQLite 这类没有 host/port 概念的库仍会看到多余字段，届时升级为「字段完全由方言声明」（见 [`docs/05_Docs/decisions/`](docs/05_Docs/decisions/)）
 - **命名已全中立**：工具名（`db_*`）、设置命名空间（`ds-db`）、路由（`/api/ds-db/*`）、字典命名空间（`settings.db`）、默认凭据引用（`DSH_DB_PASSWORD`）都不含数据库类型字样；带 `MYSQL_*` 的标识符只出现在 `dsh-dialect-mysql` 包内——那是这个方言自己的名字
 - **定义式包（Definition）未抽出——有意偏离**：`DatabaseDialect`、只读规则、值投影与注册表定义仍住在 `dsh-ds-db` 内，所以**方言包 peer 依赖的是整个插件**（工具、设置页、客户端都在里面），而不是一份接口契约。这偏离了第一方 `dsh-shell`（定义）/ `dsh-bash-local`（实现）的 Shape。
