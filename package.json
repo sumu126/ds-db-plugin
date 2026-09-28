@@ -51,7 +51,7 @@
   },
   "scripts": {
     "build": "npm run build:types && node scripts/build-host.mjs && node scripts/build-client.mjs && node scripts/build-dialects.mjs",
-    "build:types": "tsc -p tsconfig.emit.json",
+    "build:types": "node scripts/build-types.mjs",
     "prepare": "npm run build",
     "prepack": "npm run build",
     "typecheck": "npm run build:types && tsc -p tsconfig.types.json && tsc -p dialects/mysql/tsconfig.types.json",

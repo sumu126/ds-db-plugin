@@ -87,7 +87,7 @@
 ```sh
 cd ds-db-plugin
 pnpm install --no-frozen-lockfile      # 必须 pnpm：方言依赖用 workspace: 声明，npm 不认
-npm run build                          # 产出 lib/index.js（host）、lib/client.js（浏览器半边）与 lib/types/**（类型声明）
+npm run build                          # 产出 lib/index.js（host）、lib/client.js（浏览器半边）与 lib/types/**（类型声明；旁边没有已构建的 harness 时这一步自动跳过，见「给插件开发者」）
 ```
 
 > **必须用 pnpm。** `dsh-dialect-mysql` 以 `workspace:^` 声明——本地是同仓链接，发布时由 pnpm 改写成版本号，一份声明两用；npm 会直接以 `EUNSUPPORTEDPROTOCOL "workspace:"` 拒绝。
@@ -300,7 +300,7 @@ const problems = auditDialect(YOUR_DIALECT)   // 空数组 = 通过
 
 方言要的东西——`DatabaseDialect` 及其行类型、只读判定的 `scanStatement` / `SHARED_FORBIDDEN` / `ReadOnlyRules`、值读取器 `cell*`、以及自检的 `auditDialect`——都从 **`dsh-ds-db/dialect-api`** 这一个入口取。它是**构建产物**（`lib/dialect-api.js`），因为安装形态的 `dsh` 只加载已构建的 JavaScript、没有 TypeScript 加载器：`dsh-ds-db/src/*.ts` 那条路径只在源码 checkout 下成立，装出来的包会在启动时报 `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`，方言行直接挂不上。构建脚本会拒收任何残留 `.ts` 导入的产物。
 
-这个入口**带类型声明**：`npm run build` 的 `build:types` 步骤用 `tsc -p tsconfig.emit.json` 把 `src/` 的声明出到 `lib/types/`，`exports` 的每个入口都带 `types` 条件（`./dialect-api` → `lib/types/dialect-api.d.ts`）。所以仓外方言包在 `strict` 下直接拿到 `DatabaseDialect` 等类型，不必去够本仓的 TypeScript 源码——那正是只有本仓方言（靠 `tsconfig` 的 `paths`）才能做到的事。
+这个入口**带类型声明**：`npm run build` 的 `build:types` 步骤用 `tsc -p tsconfig.emit.json` 把 `src/` 的声明出到 `lib/types/`，`exports` 的每个入口都带 `types` 条件（`./dialect-api` → `lib/types/dialect-api.d.ts`）。所以仓外方言包在 `strict` 下直接拿到 `DatabaseDialect` 等类型，不必去够本仓的 TypeScript 源码——那正是只有本仓方言（靠 `tsconfig` 的 `paths`）才能做到的事。类型声明是**开发态增益**：`tsconfig.emit.json` 的 `paths` 指向旁边的 harness checkout，从 git 安装本仓库的机器没有这一份，`scripts/build-types.mjs` 检测到后就跳过这一步（打一行 `skipping type declarations…`），其余 esbuild 步骤把 `@deepseek-ai/*` 全部 external，不依赖类型解析——所以 `prepare`/`prepack` 在无 harness 的机器上照样成功。
 
 覆盖：只读判定（含「字面量/注释里的分号」这类绕过）、行数上界、标识符引用、各元数据投影、能力与实现一致性、字段默认值类型。**不需要数据库服务**。
 
@@ -437,7 +437,7 @@ cd ../deepseek-harness
 pnpm dsh web --patch <插件目录>/.dev/cordis.yml
 ```
 
-`tsconfig.json` 与 `tsconfig.types.json` 里的 `../deepseek-harness/...` 是**开发期约定**：`typecheck`、`test`、`verify:host`、`verify:settings`、`verify:loader`、`verify:cards` 都需要旁边有一份 harness checkout，换机器要同步调整这些 `paths`。**`npm run build` 与用户安装不受影响**——产物里的 harness 依赖是外部的，由宿主提供。
+`tsconfig.json` 与 `tsconfig.types.json` 里的 `../deepseek-harness/...` 是**开发期约定**：`typecheck`、`test`、`verify:host`、`verify:settings`、`verify:loader`、`verify:cards` 都需要旁边有一份 harness checkout，换机器要同步调整这些 `paths`。**`npm run build` 与用户安装不受影响**——产物里的 harness 依赖是外部的，由宿主提供；唯一吃这份约定的是 `build:types`（类型声明），它由 `scripts/build-types.mjs` 守卫：旁边没有已构建的 harness 就跳过并打一行提示，构建照常成功。
 
 ### 发布前清单
 
