@@ -13,9 +13,11 @@
  */
 
 import z from '@deepseek-ai/schemastery'
+import { CARD_BYTES, CARD_ITEMS, CARD_ROWS } from './card-budget.ts'
+import { SESSION_LIMIT } from './connection.ts'
 import {
   DEFAULT_CONNECTION_ID, DEFAULT_PASSWORD_REF, UNSET_PORT,
-  type ConnectionProfile, type DatabaseSettings,
+  type ConnectionProfile, type DatabaseSettings, type KnownDialectPackage,
 } from './contract.ts'
 
 /**
@@ -42,6 +44,36 @@ export const SHARED_DEFAULTS: ConnectionProfile = {
 
 /** Credential-reference shape, shared by every schema that carries one. */
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+/**
+ * One hinted dialect package, as a deployment writes it in `cordis.yml`.
+ *
+ * The registry key, the label the page shows, and the package to install: the
+ * same three facts the shipped list carries.
+ */
+const KnownDialectPackageSchema: z<KnownDialectPackage> = z.object({
+  name: z.string().min(1),
+  label: z.string().min(1),
+  package: z.string().min(1),
+})
+
+/**
+ * How long tool registration waits for the configured dialect package.
+ *
+ * Long enough for a sibling row of the same patch to activate, short enough
+ * that a missing package still ends with registered tools and a refusal naming
+ * what is available.
+ */
+export const DIALECT_WAIT_MS = 100
+
+/**
+ * Rows a `db_sample` call reads when it names none.
+ *
+ * A hand-read default: enough rows to see a table's shape and value spellings,
+ * few enough to stay a glance. The configuration schema defaults to it, and the
+ * tool's description states whichever value the deployment configured.
+ */
+export const SAMPLE_ROWS = 5
 
 /**
  * One saved connection, as a settings section item or a `connections` entry.
@@ -91,12 +123,28 @@ export interface Config {
   queryTimeoutMs?: number
   /** Maximum rows one `db_query` call returns. @default 200 */
   maxRows?: number
+  /**
+   * Rows one `db_sample` call reads when it names none.
+   *
+   * Also written into that tool's model-facing description.
+   * @default 5
+   */
+  sampleRows?: number
   /** Registered dialect the flat connection addresses; empty means the first one registered. @default '' */
   dialect?: string
   /** Saved connections a deployment preprovisions; the flat fields are ignored when present. */
   connections?: ConnectionProfile[]
   /** The connection the tools address by id; defaults to the first saved one. */
   activeId?: string
+  /**
+   * Dialect packages the settings page hints when they are not registered.
+   *
+   * An empty or absent list means the packages this plugin knows about, so a
+   * deployment that publishes its own dialect names it here to have the page
+   * offer it with the package to install.
+   * @default []
+   */
+  knownDialectPackages?: KnownDialectPackage[]
   /**
    * How long tool registration waits for the configured dialect package, in
    * milliseconds.
@@ -114,23 +162,50 @@ export interface Config {
    * @default 4
    */
   sessionLimit?: number
+  /**
+   * Serialized UTF-8 bytes one call's card metadata may take, its own fields
+   * included. Past it a card drops rows or items and marks itself truncated.
+   * @default 16384
+   */
+  cardMaxBytes?: number
+  /** Rows one table card carries at most. @default 50 */
+  cardMaxRows?: number
+  /** Items one list card carries at most. @default 100 */
+  cardMaxItems?: number
 }
 
-/** Validated composition configuration. */
+/**
+ * Validated composition configuration.
+ *
+ * Every field carries its default in the schema, so a value is present here
+ * whichever layer supplied it, and the constants that back those defaults are
+ * the same ones the callers of {@link compositionEntry} fall back to.
+ */
 export const Config: z<Config> = z.object({
-  host: z.string(),
-  port: z.natural().max(65535),
-  user: z.string(),
-  database: z.string(),
-  passwordEnv: z.string().pattern(IDENTIFIER),
-  connectTimeoutMs: z.natural().min(1),
-  queryTimeoutMs: z.natural().min(1),
-  maxRows: z.natural().min(1),
-  dialect: z.string(),
+  host: z.string().default(SHARED_DEFAULTS.host),
+  port: z.natural().max(65535).default(SHARED_DEFAULTS.port),
+  user: z.string().default(SHARED_DEFAULTS.user),
+  database: z.string().default(SHARED_DEFAULTS.database),
+  passwordEnv: z.string().pattern(IDENTIFIER).default(SHARED_DEFAULTS.passwordEnv),
+  connectTimeoutMs: z.natural().min(1).default(SHARED_DEFAULTS.connectTimeoutMs),
+  queryTimeoutMs: z.natural().min(1).default(SHARED_DEFAULTS.queryTimeoutMs),
+  maxRows: z.natural().min(1).default(SHARED_DEFAULTS.maxRows),
+  sampleRows: z.natural().min(1).default(SAMPLE_ROWS),
+  dialect: z.string().default(SHARED_DEFAULTS.dialect),
+  // No default: an absent list and an empty one both mean the flat fields above
+  // describe the single connection, and the presence of a list is what replaces
+  // them.
   connections: z.array(ProfileSchema),
-  activeId: z.string(),
-  dialectWaitMs: z.natural().min(1),
-  sessionLimit: z.natural().min(1),
+  activeId: z.string().default(''),
+  // Empty means "the packages this plugin knows about": the entry point falls
+  // back to its own list, so `dialect-catalog` stays out of this module and no
+  // import cycle forms between the schema and the hint list.
+  knownDialectPackages: z.array(KnownDialectPackageSchema).default([]),
+  dialectWaitMs: z.natural().min(1).default(DIALECT_WAIT_MS),
+  sessionLimit: z.natural().min(1).default(SESSION_LIMIT),
+  cardMaxBytes: z.natural().min(1).default(CARD_BYTES),
+  cardMaxRows: z.natural().min(1).default(CARD_ROWS),
+  cardMaxItems: z.natural().min(1).default(CARD_ITEMS),
 })
 
 /** The flat connection the composition fields describe. */

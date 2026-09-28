@@ -121,14 +121,21 @@ assert.deepEqual(listed.connections.map(connection => connection.name), ['主库
 assert.equal(listed.active, '报表库', 'the document names the default connection')
 console.log(`connections: ${listed.connections.map(connection => `${connection.name}@${connection.host}:${connection.port}`).join(', ')}`)
 
-// 3. Unloading the tree takes the tools with it: the registry is a service of
-//    the disposed tree, so its tools go with it.
-await ctx.fiber.dispose()
-for (let attempt = 0; attempt < 200 && ctx.tools !== undefined; attempt++) {
+// 3. Unloading the plugin row takes its tools with it while the registry stays
+//    up. Disposing the whole root would take the registry down as its own
+//    service and prove nothing about this plugin's registrations, so the row's
+//    own fiber is the one disposed — the HMR path a config edit takes.
+const pluginEntry = [...ctx.loader.entries()].find(entry => entry.options.name === asUrl('src/index.ts'))
+assert.ok(pluginEntry, 'the Loader mounted the plugin row')
+assert.ok(pluginEntry.fiber, 'the plugin row runs a fiber')
+await pluginEntry.fiber.dispose()
+for (let attempt = 0; attempt < 200 && ctx.tools.get('db_connections') !== undefined; attempt++) {
   await new Promise(resolve => setTimeout(resolve, 10))
 }
-assert.equal(ctx.tools, undefined, 'the tool registry is gone after unload, so its tools are too')
-console.log('unload: the tool registry is gone')
+assert.ok(ctx.tools, 'the tool registry outlives the plugin row')
+assert.equal(ctx.tools.get('db_connections'), undefined, 'db_connections goes with the row fiber')
+assert.equal(ctx.tools.get('db_query'), undefined, 'db_query goes with the row fiber')
+console.log('unload: the row fiber took its tools, and the registry stayed up')
 
 await rm(home, { recursive: true, force: true })
 console.log('loader smoke passed')

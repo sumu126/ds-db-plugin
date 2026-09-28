@@ -58,13 +58,12 @@
   border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 10px;
   background: var(--dsw-alias-bg-layer-3);
-  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+  transition: transform 0.15s ease, border-color 0.15s ease;
 }
 
 .card:hover {
   transform: translateY(-2px);
   border-color: var(--dsw-alias-border-l4);
-  box-shadow: 0 6px 16px rgb(0 0 0 / 18%);
 }
 
 .cardHead {
@@ -89,7 +88,9 @@
   flex: none;
   padding: 1px 6px;
   border-radius: 4px;
-  background: var(--dsw-alias-bg-layer-4);
+  /* Layer 2 is the highest rung the theme sheet defines; an undefined layer-4
+     name renders the badge with no fill at all. */
+  background: var(--dsw-alias-bg-layer-2);
   font-size: 11px;
   line-height: 1.6;
   color: var(--dsw-alias-label-secondary);
@@ -180,7 +181,8 @@
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: rgb(0 0 0 / 45%);
+  background: var(--dsw-alias-bg-mask-1);
+  backdrop-filter: var(--dsw-mask-blur);
 }
 
 .dialog {
@@ -191,10 +193,10 @@
   max-height: min(640px, 90vh);
   overflow: auto;
   padding: 20px;
-  border: 0.5px solid var(--dsw-alias-border-l2);
+  border: 0;
   border-radius: 12px;
   background: var(--dsw-alias-bg-layer-2);
-  box-shadow: 0 16px 48px rgb(0 0 0 / 32%);
+  box-shadow: var(--dsw-elevation-prominent);
 }
 
 .dialogTitle {
@@ -343,7 +345,9 @@
   margin: 12px 0 0;
   font-size: 12px;
   line-height: 1.5;
-  color: var(--dsw-alias-label-error);
+  /* The error state token, which the theme sheet defines; there is no
+     `label-error` alias in the label family. */
+  color: var(--dsw-alias-state-error-primary);
 }
 
 .dialogFooter {

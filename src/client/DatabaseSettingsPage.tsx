@@ -13,10 +13,10 @@ import clsx from 'clsx'
 import { Button, IconPlusOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ConnectionCard, DbDialog, DbFormField, DbPageFace, DbProbe } from './form.ts'
-import { FIELD_INVALID_KEY, dialogValid, editDraftFor, fieldInvalid } from './form.ts'
+import { FIELD_INVALID_KEY, dialogValid, editDraftFor, endpointText, fieldInvalid } from './form.ts'
 import type { DialectCatalog } from '../contract.ts'
 import type { DbLocaleKey } from './locales.ts'
-import styles from './page.css'
+import styles from './page.module.css'
 
 /** Props the renderer binds for this settings section. */
 export type DatabaseSettingsPageProps =
@@ -97,10 +97,9 @@ function Card(props: {
       </div>
       <div className={styles.cardLines}>
         {/* Where the connection reaches, not the raw document: an unset port
-            shows the dialect's own. */}
-        <span className={styles.cardLine}>
-          {`${card.resolved.host}:${String(card.resolved.port)} · ${card.resolved.user}`}
-        </span>
+            prints no port at all and an empty account no separator — the
+            sentinel is not a port a server listens on. */}
+        <span className={styles.cardLine}>{endpointText(card.resolved)}</span>
         <span className={clsx(styles.cardLine, card.resolved.database.length === 0 && styles.cardLineMuted)}>
           {card.resolved.database.length === 0 ? t('noDatabase') : card.resolved.database}
         </span>
@@ -357,7 +356,7 @@ export function DatabaseSettingsPage(props: DatabaseSettingsPageProps) {
                   : (
                       <>
                         <h2 className={styles.dialogTitle}>
-                          {dialog.mode === 'new' ? t('newConnection') : `${t('edit')} · ${dialog.fields.name}`}
+                          {dialog.mode === 'new' ? t('newConnection') : t('editTitle', { name: dialog.fields.name })}
                         </h2>
                         <FormDialog
                           dialog={dialog}

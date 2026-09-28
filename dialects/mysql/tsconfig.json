@@ -14,7 +14,8 @@
     "types": ["node"],
     "paths": {
       "@deepseek-ai/cordis": ["../../../deepseek-harness/vendor/cordis/src/index.ts"],
-      "dsh-ds-db/src/*": ["../../src/*"]
+      "@deepseek-ai/schemastery": ["../../../deepseek-harness/vendor/schemastery/src/index.ts"],
+      "dsh-ds-db/dialect-api": ["../../lib/types/dialect-api.d.ts"]
     }
   },
   "include": ["src", "tests", "scripts"]

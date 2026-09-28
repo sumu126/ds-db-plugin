@@ -68,8 +68,13 @@ export function apply(ctx: ClientContext): void {
     },
     set: async (ref, value) => { await ctx.remote.credentials.set(ref, value) },
   }
-  const controller = new DatabaseSettingsController(scope, credentials, probeConnection, loadCatalog)
   const t = ctx.locale.bind(NS)
+  const controller = new DatabaseSettingsController(
+    scope,
+    credentials,
+    request => probeConnection(request, t),
+    loadCatalog,
+  )
 
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
@@ -136,12 +141,28 @@ function completeDescriptor(entry: Partial<DialectDescriptor> & { name: string }
 }
 
 /**
+ * One locale key and the values its placeholders take.
+ *
+ * A structural alias of the harness translate seat, so this module names no
+ * extra harness type to call it.
+ * @param key - dictionary key of the page's copy.
+ * @param params - values substituted into the template's placeholders.
+ * @returns the copy for the active locale.
+ */
+type Translate = (key: DbLocaleKey, params?: Record<string, string>) => string
+
+/**
  * Probe a connection over the plugin's own authenticated API route: an
  * unsaved draft, a saved id, or the connection the tools currently address.
+ *
+ * The refusal text a probe reports is copy the user reads, so the two parts
+ * this module writes — the status line and the no-reason fallback — come from
+ * the dictionary; a message the Host wrote is passed through as data.
  * @param request - what the page asks the Host to probe.
+ * @param t - the page's translate seat, for the copy this module owns.
  * @returns the probe outcome; a transport failure is a failed probe, not a throw.
  */
-async function probeConnection(request: ProbeRequest): Promise<DbProbe> {
+async function probeConnection(request: ProbeRequest, t: Translate): Promise<DbProbe> {
   const body: { id?: string, profile?: ConnectionProfile } = {}
   if (request.id !== undefined) body.id = request.id
   if (request.profile !== undefined) body.profile = request.profile
@@ -151,7 +172,7 @@ async function probeConnection(request: ProbeRequest): Promise<DbProbe> {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     })
-    if (!response.ok) return { status: 'failed', message: `HTTP ${String(response.status)}` }
+    if (!response.ok) return { status: 'failed', message: t('httpStatus', { status: String(response.status) }) }
     const payload = await response.json() as { ok?: unknown; version?: unknown; latencyMs?: unknown; message?: unknown }
     if (payload.ok === true && typeof payload.version === 'string') {
       return {
@@ -160,7 +181,7 @@ async function probeConnection(request: ProbeRequest): Promise<DbProbe> {
         latencyMs: typeof payload.latencyMs === 'number' ? payload.latencyMs : 0,
       }
     }
-    return { status: 'failed', message: typeof payload.message === 'string' ? payload.message : 'no message' }
+    return { status: 'failed', message: typeof payload.message === 'string' ? payload.message : t('noMessage') }
   } catch (error: unknown) {
     return { status: 'failed', message: error instanceof Error ? error.message : String(error) }
   }

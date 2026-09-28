@@ -120,11 +120,11 @@ const UNREACHABLE = { host: '127.0.0.1', port: 1, user: 'nobody', database: '' }
  * its tools once the dialect is registered. Nothing here reads MySQL from the
  * plugin's own source, because the plugin no longer contains any database type.
  */
-async function mount(config) {
+async function mount(config, dialectConfig = {}) {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt, {})
   await ctx.plugin(ToolRuntime, { mode: 'native', maxParallelSubCalls: 1 })
-  await ctx.plugin(mysqlDialect, {})
+  await ctx.plugin(mysqlDialect, dialectConfig)
   await ctx.plugin(mysqlReadOnly, config)
   // The tools appear when the dialect registers; that activation is a fiber
   // transition, so the check waits for the observable it asserts on.
@@ -156,9 +156,24 @@ assert.equal(
 console.log('dialect-derived parameter text: unchanged')
 
 // The plugin provides the registry; the dialect package mounted above fills it.
+// The row registers a copy of the shared definition so the deployment's pool
+// bounds travel with it, so what is asserted is MySQL's own facts rather than
+// object identity.
 assert.deepEqual(ctx.databaseDialects.names(), ['mysql'])
-assert.equal(ctx.databaseDialects.get('mysql'), MYSQL_DIALECT)
+const registered = ctx.databaseDialects.get('mysql')
+assert.equal(registered.name, MYSQL_DIALECT.name)
+assert.equal(registered.label, MYSQL_DIALECT.label)
+assert.equal(registered.description, MYSQL_DIALECT.description)
+assert.deepEqual([...registered.capabilities], [...MYSQL_DIALECT.capabilities])
+assert.deepEqual(registered.connectionDefaults, MYSQL_DIALECT.connectionDefaults)
+assert.equal(typeof registered.open, 'function', 'the registered dialect opens its own sessions')
 console.log(`dialect registry: ${ctx.databaseDialects.names().join(', ')}`)
+
+// The pool bounds are the dialect row's own config, so the schema accepts them
+// and the same MySQL facts register under them.
+const poolBounded = await mount(UNREACHABLE, { connectionLimit: 2, queueLimit: 4 })
+assert.equal(poolBounded.databaseDialects.get('mysql').label, 'MySQL')
+console.log('dialect pool bounds: a configured row registers the same MySQL')
 
 const query = ctx.tools.get('db_query')
 const write = await query.execute({ sql: 'DROP TABLE users' }, CALL).then(() => undefined, error => error)
@@ -543,6 +558,7 @@ assertOutput(solo, 'db_explain', plan)
 const sampleMeta = assertMeta(solo, 'db_sample', { database: 'app', table: 'events', rows: 2 }, sample, 'table')
 assert.equal(sampleMeta.database, 'app', 'a sample card names the database it read')
 assert.equal(sampleMeta.table, 'events', 'a sample card names the table it read')
+assert.ok(Number.isInteger(sampleMeta.elapsedMs), 'a sample card carries the time the server took')
 console.log('output schemas: db_connections, db_sample, db_explain all satisfied')
 
 // The card metadata is what the Web client draws in place of the generic row. It

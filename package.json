@@ -9,9 +9,20 @@
     "url": "git+https://github.com/sumu126/ds-db-plugin.git"
   },
   "main": "lib/index.js",
+  "types": "./lib/types/index.d.ts",
   "exports": {
-    ".": "./lib/index.js",
-    "./client": "./lib/client.js",
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./lib/types/client/index.d.ts",
+      "default": "./lib/client.js"
+    },
+    "./dialect-api": {
+      "types": "./lib/types/dialect-api.d.ts",
+      "default": "./lib/dialect-api.js"
+    },
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
@@ -27,14 +38,23 @@
       "patch": "./cordis.patch.yml"
     },
     "client": {
-      "platform": "web"
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-api-remotes",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-chat",
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-slots"
+      ]
     }
   },
   "scripts": {
-    "build": "node scripts/build-host.mjs && node scripts/build-client.mjs && node scripts/build-dialects.mjs",
+    "build": "npm run build:types && node scripts/build-host.mjs && node scripts/build-client.mjs && node scripts/build-dialects.mjs",
+    "build:types": "tsc -p tsconfig.emit.json",
     "prepare": "npm run build",
     "prepack": "npm run build",
-    "typecheck": "tsc -p tsconfig.types.json && tsc -p dialects/mysql/tsconfig.types.json",
+    "typecheck": "npm run build:types && tsc -p tsconfig.types.json && tsc -p dialects/mysql/tsconfig.types.json",
     "test": "node --import tsx/esm --test dialects/mysql/tests/sql-guard.test.ts dialects/mysql/tests/dialect.test.ts dialects/mysql/tests/contract-audit.test.ts",
     "test:dialects": "npm --prefix dialects/mysql test",
     "overlay": "node scripts/dev-overlay.mjs",
@@ -42,11 +62,11 @@
     "verify:settings": "node --import tsx/esm scripts/verify-settings.mts",
     "verify:loader": "node --import tsx/esm tests/loader-smoke.mjs",
     "verify:cards": "node --import tsx/esm scripts/verify-cards.mjs",
+    "verify:client": "node --import tsx/esm scripts/verify-client.mjs",
     "card:live": "node --experimental-strip-types scripts/verify-live.mjs",
     "db:live": "node --import tsx/esm scripts/db-live.mjs"
   },
   "dependencies": {
-    "clsx": "^2.1.1",
     "dsh-dialect-mysql": "workspace:^"
   },
   "peerDependencies": {
@@ -74,6 +94,7 @@
   "devDependencies": {
     "@types/node": "^22.20.0",
     "@types/react": "^18.3.31",
+    "clsx": "^2.1.1",
     "esbuild": "^0.25.0",
     "lightningcss": "^1.32.0",
     "react": "^18.3.1",

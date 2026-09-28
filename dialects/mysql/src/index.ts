@@ -15,16 +15,16 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { DIALECT_CAPABILITIES, type DialectCapability } from 'dsh-ds-db/src/dialect.ts'
-import type {
-  DatabaseConnection, DatabaseDialect, DialectColumnRow, DialectDatabaseRow,
-  DialectIndexRow, DialectQuery, DialectSession, DialectStatement, DialectTableRow,
-} from 'dsh-ds-db/src/dialect.ts'
+import z from '@deepseek-ai/schemastery'
+// The built dialect API, not this repository's TypeScript source: a dialect is
+// installed on its own and runs under a `dsh` that has no TypeScript loader.
 import {
-  ROW_PRODUCING_LEAD, SHARED_FORBIDDEN, scanStatement,
-  type ReadOnlyRules, type SqlLexical,
-} from 'dsh-ds-db/src/sql-guard.ts'
-import { cellFlag, cellInteger, cellIsZero, cellOptionalText, cellText, type DbRow } from 'dsh-ds-db/src/value.ts'
+  cellFlag, cellInteger, cellIsZero, cellOptionalText, cellText, DIALECT_CAPABILITIES,
+  ROW_PRODUCING_LEAD, scanStatement, SHARED_FORBIDDEN,
+  type DatabaseConnection, type DatabaseDialect, type DbRow, type DialectCapability,
+  type DialectColumnRow, type DialectDatabaseRow, type DialectIndexRow, type DialectQuery,
+  type DialectSession, type DialectStatement, type DialectTableRow, type ReadOnlyRules, type SqlLexical,
+} from 'dsh-ds-db/dialect-api'
 import mysql from 'mysql2/promise'
 import type { FieldPacket, Pool } from 'mysql2/promise'
 
@@ -39,6 +39,42 @@ const POOL_CONNECTION_LIMIT = 4
 
 /** Queued statements one plugin instance admits before `waitForConnections` blocks. */
 const POOL_QUEUE_LIMIT = 32
+
+/** The pool bounds one plugin instance runs under. */
+export interface PoolLimits {
+  /** Sockets one pool keeps open, per connection. */
+  connectionLimit: number
+  /** Queued statements one pool admits before it refuses instead. */
+  queueLimit: number
+}
+
+/** The pool bounds a deployment that configures none gets. */
+export const DEFAULT_POOL_LIMITS: PoolLimits = {
+  connectionLimit: POOL_CONNECTION_LIMIT,
+  queueLimit: POOL_QUEUE_LIMIT,
+}
+
+/**
+ * Configuration of the `dialect-mysql` row in `cordis.yml`.
+ *
+ * The driver's own bounds are the deployment's, not MySQL's: a host serving one
+ * reader and a host serving a team want different socket counts.
+ */
+export interface Config {
+  /** Sockets one pool keeps open per connection. @default 4 */
+  connectionLimit?: number
+  /**
+   * Queued statements one pool admits before `waitForConnections` refuses.
+   * @default 32
+   */
+  queueLimit?: number
+}
+
+/** Validated configuration of this dialect's row. */
+export const Config: z<Config> = z.object({
+  connectionLimit: z.natural().min(1).default(POOL_CONNECTION_LIMIT),
+  queueLimit: z.natural().default(POOL_QUEUE_LIMIT),
+})
 
 /**
  * MySQL lexemes: single- and double-quoted strings, backtick identifiers, and
@@ -190,8 +226,8 @@ class MysqlSession implements DialectSession {
   }
 }
 
-/** Build the pool for one resolved connection. */
-function createPool(connection: DatabaseConnection): Pool {
+/** Build the pool for one resolved connection under the deployment's bounds. */
+function createPool(connection: DatabaseConnection, limits: PoolLimits = DEFAULT_POOL_LIMITS): Pool {
   return mysql.createPool({
     host: connection.host,
     port: connection.port,
@@ -200,8 +236,8 @@ function createPool(connection: DatabaseConnection): Pool {
     ...connection.database === undefined ? {} : { database: connection.database },
     connectTimeout: connection.connectTimeoutMs,
     waitForConnections: true,
-    connectionLimit: POOL_CONNECTION_LIMIT,
-    queueLimit: POOL_QUEUE_LIMIT,
+    connectionLimit: limits.connectionLimit,
+    queueLimit: limits.queueLimit,
     enableKeepAlive: true,
     // The read-only posture has three layers: this pool's statement guard, the
     // lexical guard in sql-guard.ts, and the deployment's own read-only account.
@@ -365,7 +401,18 @@ export const MYSQL_DIALECT: DatabaseDialect = {
  * Registration is an effect, so unloading this package takes the dialect with
  * it and a connection that names `mysql` is refused by name again.
  * @param ctx - the plugin context, which serves the registry this package injects.
+ * @param config - the pool bounds this deployment runs under.
  */
-export function apply(ctx: Context): void {
-  ctx.effect(() => ctx.databaseDialects.register(MYSQL_DIALECT), 'mysql dialect')
+export function apply(ctx: Context, config: Config = {}): void {
+  const limits: PoolLimits = {
+    connectionLimit: config.connectionLimit ?? DEFAULT_POOL_LIMITS.connectionLimit,
+    queueLimit: config.queueLimit ?? DEFAULT_POOL_LIMITS.queueLimit,
+  }
+  // Only the pool bounds are the deployment's, so the shared definition is
+  // copied with its own `open` rather than rebuilt.
+  const dialect: DatabaseDialect = {
+    ...MYSQL_DIALECT,
+    open: async connection => new MysqlSession(createPool(connection, limits), connection.queryTimeoutMs),
+  }
+  ctx.effect(() => ctx.databaseDialects.register(dialect), 'mysql dialect')
 }

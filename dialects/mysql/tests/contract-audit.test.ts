@@ -5,8 +5,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { auditDialect } from 'dsh-ds-db/src/dialect-audit.ts'
-import type { DatabaseDialect } from 'dsh-ds-db/src/dialect.ts'
+import { auditDialect, type DatabaseDialect } from 'dsh-ds-db/dialect-api'
 import { MYSQL_DIALECT } from '../src/index.ts'
 
 /** The dialect this package ships passes the contract audit. */

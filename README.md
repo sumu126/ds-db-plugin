@@ -53,10 +53,12 @@
 │   ├── dialect.ts          # ★ 方言 seam：DatabaseDialect 定义 + 注册表服务
 │   ├── dialect-catalog.ts  # 可安装的方言包清单与默认方言名
 │   ├── dialect-audit.ts    # ★ 方言契约自检（方言作者用）
+│   ├── dialect-api.ts      # ★ 方言作者的公开面，构建为 `dsh-ds-db/dialect-api`
 │   ├── connection.ts       # 方言中立的会话运行器（身份换会话、超时、截断、错误包装）
 │   ├── sql-guard.ts        # 只读语句判定（词法与禁止项由方言提供）
 │   ├── value.ts            # 无损 JSON 投影与单元格读取器
 │   ├── tools.ts            # 模型可见工具（方言中立，不含 SQL）
+│   ├── card-budget.ts      # 卡片元数据的字节/行/项上限，也是配置 schema 默认值的来源
 │   └── client/             # 浏览器半边：设置整页、表单状态机、双语字典、CSS Modules
 ├── dialects/               # ★ 数据库类型工作区
 │   ├── mysql/              #   dsh-dialect-mysql：官方方言，随主包自动安装
@@ -66,10 +68,10 @@
 │   ├── _template/          #   新方言的起手骨架（不是包）
 │   └── README.md           #   工作区说明：怎么加一个方言
 ├── docs/                   # 需求、设计、API 契约、决策记录
-├── scripts/                # 构建与验证脚本
-├── lib/                    # 构建产物（npm run build 生成，不入库）
+├── scripts/                # 构建、验证与探针脚本
+├── lib/                    # 构建产物（npm run build 生成，不入库）：js 由 esbuild 打，types/ 由 tsc 出
 ├── LICENSE                 # MIT
-└── .dev/                   # 开发用临时目录（生成的 overlay）
+└── .dev/                   # 开发用临时目录（三个生成的 overlay，不入库）
 ```
 
 ## 快速开始（使用者）
@@ -85,7 +87,7 @@
 ```sh
 cd ds-db-plugin
 pnpm install --no-frozen-lockfile      # 必须 pnpm：方言依赖用 workspace: 声明，npm 不认
-npm run build                          # 产出 lib/index.js（host）与 lib/client.js（浏览器半边）
+npm run build                          # 产出 lib/index.js（host）、lib/client.js（浏览器半边）与 lib/types/**（类型声明）
 ```
 
 > **必须用 pnpm。** `dsh-dialect-mysql` 以 `workspace:^` 声明——本地是同仓链接，发布时由 pnpm 改写成版本号，一份声明两用；npm 会直接以 `EUNSUPPORTEDPROTOCOL "workspace:"` 拒绝。
@@ -108,13 +110,35 @@ pnpm dsh web --patch <插件目录>/.dev/cordis.yml
 
 `--patch` 里的插件路径必须是绝对路径。
 
+**这条路径必须用源码启动器（`pnpm dsh`）。** 已安装形态的 CLI（`node apps/cli/lib/bin.js` 或 npm 装的 `dsh`）加载不了 profile 之外的 `file://` 插件行：框架只对位于 `$DSH_HOME/profiles` **之内**的模块做裸包路由，profile 外的插件因此回落到原生解析，找不到宿主提供的 `@deepseek-ai/*`（它们是 optional peer，不在插件自己的 `node_modules` 里）。`pnpm dsh` 之所以可以，是因为它带 tsx，而 tsx 走本仓库 `tsconfig.json` 的 `paths` 把 `@deepseek-ai/*` 指到 harness 源码。失败时是这样：
+
+```
+dsh: warning: 1 entry did not activate
+ds-db (file:///…/ds-db-plugin/lib/index.js): failed to import
+```
+
+用装了 `dsh` 的机器做开发时，走 B（装进 profile），不要指望 `dsh web --patch <checkout 里的插件>`。
+
 **B. 安装进 profile（可安装包形态）**
 
-```sh
-dsh plugin --profile demo add .
-dsh --profile demo --dump-config        # 应能看到 "# == dsh-ds-db" 这一层
-dsh --profile demo
-```
+`dsh-ds-db` 的 `dependencies` 里有 `dsh-dialect-mysql`，而它**还没发布到 registry**，pnpm 会去 registry 满足这条范围并以 `ERR_PNPM_FETCH_404` 失败——这是「未发布」的必然结果，不是包本身的问题。两条出路：
+
+- **发到 registry**（推荐）：两个包都发布后 `dsh plugin --profile demo add dsh-ds-db` 一条命令即可。
+- **本地用 override**：第一次 add 会先把 profile 目录建出来（然后以 404 失败）；把两个 tarball 放进该目录，并在它的 `pnpm-workspace.yaml` 里把这条依赖指向本地文件，再 add 一次。方言行仍由主包的 bundle 层插入，方言包由 override 提供：
+
+  ```yaml
+  overrides:
+    dsh-dialect-mysql: file:./dsh-dialect-mysql-0.1.0.tgz
+  ```
+
+  ```sh
+  pnpm pack --pack-destination .                                   # 根包
+  (cd dialects/mysql && pnpm pack --pack-destination ../..)        # 方言包
+  cp dsh-*.tgz "$DSH_HOME/profiles/demo/"
+  dsh plugin --profile demo add "$DSH_HOME/profiles/demo/dsh-ds-db-0.1.0.tgz"
+  dsh --profile demo --dump-config        # 应能看到 "# == dsh-ds-db" 这一层，两行（dialect-mysql、ds-db）都在
+  dsh --profile demo
+  ```
 
 ### 设置页
 
@@ -123,6 +147,7 @@ dsh --profile demo
 - 每张卡片一条连接，悬浮抬升；徽标显示类型或「使用中」
 - 右上角**新建连接** → 先选数据库类型（已安装的方言可选，未安装的显示「即将支持」及包名）→ 再填该类型的字段
 - 卡片操作：**设为使用 / 测试 / 编辑 / 删除**；切换「使用中」后下一次工具调用即生效，不需要重启
+- 连接字段留空表示**由所选类型决定**：新建时按方言默认值预填，编辑时保留空值（组合层只写平铺字段得到的那条默认连接，因此也能在页面上改）
 - 密码只写不读：经 `credentials/set` 存入凭据存储，设置文档里只有引用名
 
 ### 配置（cordis.yml）
@@ -152,9 +177,32 @@ dsh --profile demo
         dialectWaitMs: 100
         # 同时保持打开的会话数（按连接身份计），超出后关闭最久未用的一条
         sessionLimit: 4
+        # `db_sample` 未指定行数时读几行（也会写进该工具的模型可见描述）
+        sampleRows: 5
+        # 设置页「即将支持」提示的方言包；留空/不写就用本插件自带的那份清单
+        knownDialectPackages:
+          - name: clickhouse
+            label: ClickHouse
+            package: dsh-dialect-clickhouse
+        # 一次调用的卡片元数据上限（UTF-8 字节，含卡片自身字段）；触顶就少带几行并标「已截断」
+        cardMaxBytes: 16384
+        # 表格卡最多带几行、清单卡最多带几项
+        cardMaxRows: 50
+        cardMaxItems: 100
 ```
 
 补丁按行整块替换 `config`，覆盖时请写全要保留的键。
+
+方言行也可以带自己的配置——连接池上限是**部署**的取值，不是数据库的：
+
+```yaml
+- insert:
+    - id: dialect-mysql
+      name: 'dsh-dialect-mysql'
+      config:
+        connectionLimit: 4    # 每个连接保持打开的 socket 数
+        queueLimit: 32        # 排队等待的语句数，超出即拒绝
+```
 
 ### 只读姿态的三层
 
@@ -238,16 +286,21 @@ configFields: [{ key: 'sslMode', kind: 'text', default: 'disable', required: fal
 ```
 
 - **缺什么能力就别声明什么**：能力缺失时工具会降级（`db_describe` 省略建表语句、索引为空、行数估算为 `null`、字符集为空串），而不是去跑一条你的库没有的 SQL。这是契约的一部分，不是异常
+- **驱动侧的可调参数写成方言自己的 `Config`**：连接池上限这类取值随部署而变，不是数据库的事实——导出 Schemastery schema，在 `apply(ctx, config)` 里读，默认值写进 schema。`dialects/mysql` 的 `connectionLimit` / `queueLimit` 就是例子，配置写在方言行上（见[配置](#配置cordisyml)）
 - `configFields` 的值存进连接的 `extra`，设置页会为你的方言渲染这些字段
 - 声明 `sample` / `explain` 就必须实现同名方法，否则注册直接抛错
 
 **第 5 步：自检**
 
 ```ts
-import { auditDialect } from 'dsh-ds-db/src/dialect-audit.ts'
+import { auditDialect } from 'dsh-ds-db/dialect-api'
 
 const problems = auditDialect(YOUR_DIALECT)   // 空数组 = 通过
 ```
+
+方言要的东西——`DatabaseDialect` 及其行类型、只读判定的 `scanStatement` / `SHARED_FORBIDDEN` / `ReadOnlyRules`、值读取器 `cell*`、以及自检的 `auditDialect`——都从 **`dsh-ds-db/dialect-api`** 这一个入口取。它是**构建产物**（`lib/dialect-api.js`），因为安装形态的 `dsh` 只加载已构建的 JavaScript、没有 TypeScript 加载器：`dsh-ds-db/src/*.ts` 那条路径只在源码 checkout 下成立，装出来的包会在启动时报 `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`，方言行直接挂不上。构建脚本会拒收任何残留 `.ts` 导入的产物。
+
+这个入口**带类型声明**：`npm run build` 的 `build:types` 步骤用 `tsc -p tsconfig.emit.json` 把 `src/` 的声明出到 `lib/types/`，`exports` 的每个入口都带 `types` 条件（`./dialect-api` → `lib/types/dialect-api.d.ts`）。所以仓外方言包在 `strict` 下直接拿到 `DatabaseDialect` 等类型，不必去够本仓的 TypeScript 源码——那正是只有本仓方言（靠 `tsconfig` 的 `paths`）才能做到的事。
 
 覆盖：只读判定（含「字面量/注释里的分号」这类绕过）、行数上界、标识符引用、各元数据投影、能力与实现一致性、字段默认值类型。**不需要数据库服务**。
 
@@ -300,6 +353,8 @@ pnpm run verify:host && pnpm run verify:cards
 
 **Node 22 是硬要求**：`Promise.withResolvers`、`node:zlib` 的 zstd、`--experimental-strip-types` 都在用；低于 22 会直接报错而不是降级。
 
+**harness 版本前提**：本工程验证于 `deepseek-harness` @ `ddefc45`（`0.1.6-alpha.2`），且那份 checkout 里 `packages/core/tools/src/index.ts` 带一处**有意的一行改动**——`Symbol('@deepseek-ai/dsh-tools.scheduler')` 改为 `Symbol.for(...)`，让同一进程里两份 `dsh-tools` 共享同一个调度器符号（仓外插件在开发态与安装态正是这种情况）。harness 的 API 是 pre-stable：**换版本、或去掉这一行之后，请重跑上表与下表全部检查**。
+
 | 检查 | 前置 | 新人能直接跑吗 |
 | --- | --- | --- |
 | `typecheck` / `test`（24 例） | 兄弟 `../deepseek-harness` | ✅ |
@@ -308,8 +363,10 @@ pnpm run verify:host && pnpm run verify:cards
 | `verify:loader` | 同上；自带一次性 `DSH_HOME` | ✅ |
 | `card:live` | **你自己的会话日志路径** | ❌ 不属于上手路径 |
 | `db:live` | **你自己的连接名 + 凭据** | ❌ 同上 |
+| `scripts/web-probe.mjs` | 先 `pnpm run build`，再用源码启动器在 3099 起一个服务器 | ❌ 同上 |
+| `scripts/install-probe.mjs` | 先把插件装进一个 profile | ❌ 同上 |
 
-两条手工检查要显式传你自己环境的东西（会话日志、连接名），所以它们不是上手路径的一部分——它们是**你改完东西之后的回归工具**。
+两条手工检查和两个探针都要显式传你自己环境的东西、或先备好一个运行中的服务器 / 已安装的 profile，所以它们不是上手路径的一部分——它们是**你改完东西之后的回归工具**。
 
 ## 给插件开发者：本地开发
 
@@ -321,18 +378,28 @@ npm run verify:host       # 挂真实 ToolRuntime：方言以独立插件挂载�
 npm run verify:settings   # 挂真实设置服务：工具读到的是用户保存的文档，而非组合兜底
 npm run verify:loader     # 经 Loader + 真实 cordis.yml 组装：加载、注入、卸载
 npm run verify:cards      # 两端往返：Host 写的会话卡片，客户端读回同一张
-npm run build             # 核心 + 浏览器半边 + 每个方言包
-npm run overlay           # 生成 .dev/cordis.yml（两行：方言包 + 核心）
+npm run verify:client     # 真的跑一遍浏览器半边：apply 注册了什么、卸载是否收干净
+npm run build             # 类型声明 + 核心 + 浏览器半边 + 每个方言包
+npm run overlay           # 生成三个 overlay：.dev/cordis.yml、.dev/built.yml、.dev/install-probe.yml
 ```
 
-四道 `verify` 各自覆盖不同的一半，缺一道就有一类错误能长期隐身：
+`npm run overlay` 写三个 overlay（行里是本机绝对路径，所以生成而不入库）：`.dev/cordis.yml` 挂**源码**两行（日常开发），`.dev/built.yml` 挂**构建产物**两行（`pnpm run build` 之后，看真实产物的行为），`.dev/install-probe.yml` 只挂一个探针行（见下）。从 harness checkout 启动：
+
+```sh
+pnpm dsh --profile web --patch <插件目录>/.dev/cordis.yml --port 3099 --no-open
+```
+
+**必须用源码启动器 `pnpm dsh`**：已安装的 `dsh` 加载不了 profile 之外的 `file://` 行（原因见「加载插件」一节），会报 `failed to import`。
+
+四道 `verify` 各自覆盖不同的一半，缺一道就有一类错误能长期隐身（`verify:client` 是第五道，覆盖浏览器半边自身的注册与卸载）：
 
 | 检查 | 挂什么 | 抓什么 |
 | --- | --- | --- |
 | `verify:host` | 真实 ToolRuntime，**无**设置服务 | 工具注册、描述与拒绝文本、能力降级、多连接寻址、取消、输出 schema 与卡片元数据 |
 | `verify:settings` | + 真实设置服务与 `~/.dsh/settings.yaml` | 工具读到的是**用户文档**而不是组合兜底 |
-| `verify:loader` | 真实 Loader + 一次性 `DSH_HOME` 的 `cordis.yml` | 组合本身：行能否解析、注入是否满足、卸载是否干净 |
+| `verify:loader` | 真实 Loader + 一次性 `DSH_HOME` 的 `cordis.yml` | 组合本身：行能否解析、注入是否满足、**插件行 fiber 卸载后工具消失而注册表仍在** |
 | `verify:cards` | Host + **浏览器半边**的卡片模型（Node 即可，无 DOM） | 两端往返：Host 写的元数据，客户端读回同一张卡片；畸形元数据一律回退 |
+| `verify:client` | **浏览器半边的 `apply`**（Node 双替掉它 inject 的五个服务） | 注册面本身：两份字典、`settings.section` 与四个 `tool.call.toolview` 席位、注入面、以及**卸载后是否收干净**（HMR 的前提） |
 
 另有两个**人工回归工具**，故意不叫 `verify:`（不进 gate、不进 CI）：
 
@@ -346,6 +413,22 @@ npm run db:live -- "<连接名>" ["<另一个连接>"]  # 打真库，跑插件�
 **`db:live`** 把插件放到真服务器面前，这是其它检查做不到的：`verify:host` 连的是不可达端口，`verify:cards` 喂的是手写值，所以两处承重假设——结果行是「列名 → 值」的对象、声明了的能力真的能答——此前只被读代码确认过。它用真设置文档 + 真凭据存储，断言：行形状、跨来源一致（`db_tables` 对 `SHOW FULL TABLES`、`db_databases` 对 `SHOW DATABASES`）、卡片与同一次调用的规范值逐格一致、`db_explain` 给出非空计划、**取消之后下一次调用仍能成功**、以及超时真的会掐断语句。
 
 约束：只走插件的只读工具；连接名必须显式给，未知名字响亮失败（exit 2 并列出可用的）；**不断言业务数据**——活表的行数会变，只断言形状、跨来源一致性与自洽。
+
+另有两个**探针**，覆盖前四道 `verify` 都够不到的两段交付链路（同样不进 gate）：
+
+```sh
+# 客户端半边：证明 boot 清单里有这个客户端行、registry 服务的确实是构建产物、
+# 产物符合 lazy-CJS 契约、物化时导出 apply/inject 并注入 CSS、探针路由不是 404
+pnpm run build && node scripts/dev-overlay.mjs
+pnpm dsh --profile web --patch <插件目录>/.dev/built.yml --port 3099 --no-open   # 记下打印出的 token
+node scripts/web-probe.mjs http://127.0.0.1:3099 <token>
+
+# 已安装形态：报告装出来的那一版究竟注册了什么，然后自行退出
+dsh --profile <name> --patch <插件目录>/.dev/install-probe.yml
+```
+
+**`scripts/web-probe.mjs`** 读启动清单后，按模块表契约在 Node 里把浏览器半边**物化**一遍（stub `window.__ModuleLoader__` + 只含基线模块的 require）。它证明的是"产物能到达页面并被正确物化"，**不能**证明 React 画得对不对——那必须用浏览器看（见下）。
+**`scripts/install-probe.mjs`** 只报事实（`dialects=["mysql"] tools=[...]`）并以退出码表态，用来验证**装出来的那一版**，而不是源码。
 
 启动冒烟：
 
@@ -363,11 +446,13 @@ pnpm install --frozen-lockfile        # lockfile 必须与 package.json 一致
 pnpm run typecheck && pnpm test
 pnpm run verify:host && pnpm run verify:settings && pnpm run verify:loader && pnpm run verify:cards
 pnpm pack --pack-destination .        # 根包必须 pnpm：只有它会改写 workspace:
-npm --prefix dialects/mysql pack --pack-destination .
+npm pack ./dialects/mysql --pack-destination .   # 方言包给目录参数；`--prefix` 不换目录，会打出根包
 # 落点显式给出，下一行的相对路径才是确定的（两行都支持 --pack-destination）
-dsh plugin --profile demo add ./dsh-dialect-mysql-0.1.0.tgz
+tar -tzf dsh-dialect-mysql-0.1.0.tgz | head -3   # 先确认打的是方言包，别拿根包去 add
+# 未发布时：第一次 add 建出 profile 后以 ERR_PNPM_FETCH_404 失败，
+# 把 tarball 放进 profile 目录并按「安装进 profile」一节加 overrides，再 add 一次
 dsh plugin --profile demo add ./dsh-ds-db-0.1.0.tgz
-dsh --profile demo --dump-config | grep -E 'dialect-mysql|ds-db'   # 顺序：方言行在前
+dsh --profile demo --dump-config | grep -E 'dialect-mysql|ds-db'   # 两行都在，且方言行在前
 dsh --profile demo web                # 起得来、无 FAILED fiber、模型侧能看到 db_connections
 # 顺手在装出来的那一版上跑 db:live / card:live —— 别人替代不了这条验据
 git tag v0.1.0                        # 只有上面全绿才打
@@ -383,9 +468,10 @@ pnpm install --frozen-lockfile                                             # 一
 
 后两条与 importer 数量无关，所以它们能和第一条交叉验证——**单一判据容易被同源的东西喂饱**，这正是这几轮反复踩的那个坑。
 
-两条从**产物反推**的习惯（方言包的三处问题——无 `files` 白名单、缺 `LICENSE`、缺 `README`——都是这么发现的）：
+几条从**产物反推**的习惯（方言包的三处问题——无 `files` 白名单、缺 `LICENSE`、缺 `README`——都是这么发现的；第四处见第二条）：
 
 - **打包后先 `tar -tzf` 看清单，再看 npm 页面。** `README` 是唯一 `files` 白名单管不住的东西（npm 总是包含它），所以"加了白名单就干净了"是错的。
+- **清单里的每条命令都要按原文跑过一次。** 第四处就是这么发现的：`npm --prefix dialects/mysql pack` **不会**换目录，打出来的是根包 `dsh-ds-db-0.1.0.tgz`，于是下一行的 `add ./dsh-dialect-mysql-0.1.0.tgz` 必然 file-not-found——这条命令在写进清单时从未被执行过。现在改成 `npm pack ./dialects/mysql`，并在 `add` 之前加一道 `tar -tzf` 确认打的是哪个包。
 - **`pack` 必须排在所有会进包的改动之后。** 「`tag` 在最后」只防 tag 与产物漂移，不防"pack 之后又改了包内文件"——曾经出现过 pack 在 19:00、19:08 又提交了 README 的情况，那份快照里装的就是旧清单。
 - **再查一次时间轴：包里那份 `lib/` 是不是当前源码构建的。** 内容对了，产物仍可能是旧**行为**。分两层，都要看，而且都只看时间戳、没有文本管线的风险：
 
@@ -417,22 +503,24 @@ pnpm install --frozen-lockfile                                             # 一
 
 ## 已知限制 / 暂未实现
 
-- **随主包分发的方言只有 `dsh-dialect-mysql`**：它和第三方方言形状完全一致，只是被核心的 bundle 层与 `dependencies` 一起带上。PostgreSQL 与 Oracle 都还没有实现——加 PostgreSQL 便宜（`information_schema` 大体可移植、`?`→`$n` 是机械替换），加 Oracle 贵（无 `LIMIT`、无 `information_schema`、SID 与 service name 两种连法、`oracledb` 是重量级原生依赖）。两者都可以照 `dialects/_template` 起手，并参考 `dialects/mysql` 的完整实现
-- **`dsh plugin add` 的安装实测仍未完成，但原因已具体**：`dsh-dialect-mysql` 以 `workspace:^` 声明，只有 `pnpm pack` / `pnpm publish` 会把它改写成版本号（**已实测**：`npm pack` 的产物里原样保留 `workspace:^`，消费者装不上）。发布与 tarball 验证需要在普通终端跑：`pnpm install` → `pnpm pack`（root 与 `dialects/mysql` 各一个）→ `dsh plugin --profile demo add <tgz>`
+- **破坏性变更：多连接改造之前的用户文档不再被读取**。设置页保存的连接从「平铺字段」改成了 `connections[]`，旧文档里的 `ds-db.host` / `port` / `user` 等键不在当前 schema 内，会被静默丢弃，工具回落到组合层的默认连接（`127.0.0.1:3306`），需要在新设置页重录一条。这是有意接受的取舍：改造当时两个包都未发布（`npm view dsh-ds-db` / `dsh-dialect-mysql` 均 404），不存在持有旧文档的外部用户，为不存在的安装基础永久保留一条兼容读取路径不划算。组合层（`cordis.yml`）的平铺字段**不受影响**，仍然兼容。
+- **只有 MySQL 一个方言包**：它和第三方方言形状完全一致，只是被核心的 bundle 层与 `dependencies` 一起带上。PostgreSQL 与 Oracle 都还没有实现——加 PostgreSQL 便宜（`information_schema` 大体可移植、`?`→`$n` 是机械替换），加 Oracle 贵（无 `LIMIT`、无 `information_schema`、SID 与 service name 两种连法、`oracledb` 是重量级原生依赖）。两者都可以照 `dialects/_template` 起手，并参考 `dialects/mysql` 的完整实现
+- **registry 安装仍待发布**：`dsh-dialect-mysql` 以 `workspace:^` 声明，只有 `pnpm pack` / `pnpm publish` 会把它改写成版本号（**已实测**：`npm pack` 的产物里原样保留 `workspace:^`，消费者装不上；`pnpm pack` 的产物是 `^0.1.0`）。tarball 形态的安装**已验证**（见[安装进 profile](#b-安装进-profile可安装包形态)：`--dump-config` 两行都在、profile 启动后方言与四个工具都注册成功），只是需要那条 `overrides`——`dsh plugin --profile demo add dsh-ds-db` 一条命令的形式要等两个包都发布到 registry
 - **配置字段是「通用字段 + `extra`」**：Oracle 这类需要 service name 的库可以表达；但 SQLite 这类没有 host/port 概念的库仍会看到多余字段，届时升级为「字段完全由方言声明」（见 [`docs/05_Docs/decisions/`](docs/05_Docs/decisions/)）
 - **命名已全中立**：工具名（`db_*`）、设置命名空间（`ds-db`）、路由（`/api/ds-db/*`）、字典命名空间（`settings.db`）、默认凭据引用（`DSH_DB_PASSWORD`）都不含数据库类型字样；带 `MYSQL_*` 的标识符只出现在 `dsh-dialect-mysql` 包内——那是这个方言自己的名字
 - **定义式包（Definition）未抽出——有意偏离**：`DatabaseDialect`、只读规则、值投影与注册表定义仍住在 `dsh-ds-db` 内，所以**方言包 peer 依赖的是整个插件**（工具、设置页、客户端都在里面），而不是一份接口契约。这偏离了第一方 `dsh-shell`（定义）/ `dsh-bash-local`（实现）的 Shape。
   取舍理由：目前唯一随包发布的方言是 `dsh-dialect-mysql`，与插件同仓、同版本、同一次提交；拆出第二个发布物会引入独立版本线与构建顺序，而收益（方言包依赖面收窄）在只有一个方言时不成立。
-  **触发条件**：出现任何需要**独立发布**的仓外方言时，把 `dialect` / `sql-guard` / `value` / `dialect-audit` 抽成 `dsh-db-dialect-api`，两个消费者改为只依赖它。验收标准：`grep -rn "dsh-ds-db/src" dialects/` 为空，且 `dialects/*/package.json` 不再出现 `dsh-ds-db`。
+  **触发条件**：出现任何需要**独立发布**的仓外方言时，把 `dialect` / `sql-guard` / `value` / `dialect-audit` 抽成 `dsh-db-dialect-api`，两个消费者改为只依赖它。其中**「方言不再够到 TypeScript 源码」这一半已完成**：`dsh-ds-db/dialect-api` 是构建产物，方言只依赖它（`grep -rn "dsh-ds-db/src" dialects/` 已为空）。剩下的是包级依赖面——方言仍 peer 整个插件包。验收标准：`dialects/*/package.json` 不再出现 `dsh-ds-db`。
 - **远程调用面走低层通道——有意偏离**：设置页用 `connection.fetch.register` 的自定义路由 + 裸 `fetch`，而不是 Typert `@Remote`（第一方 `file-upload`、`session-log-export` 是同款用法）。原因是**仓外插件无法运行仓内的 typert 生成管线**（需要 `./typert`、`./remote` 产物与 generator 参与构建）。代价是失去生成类型与统一失败词汇，`contract.ts` 里的 wire 形状是手写的——客户端因此必须自己补齐字段（`completeDescriptor`）。**触发条件**：插件进入第一方仓库，或 typert 提供面向仓外插件的生成入口。
 - **MySQL 上的取消是「退役会话」而非「中断语句」**：mysql2 的 Promise pool 没有 `destroy()`、只有 `end()`，所以中止一次调用会让池关闭、而 `COM_QUIT` 排在正在执行的语句之后——**服务端那条语句会跑完**；随后该会话被淘汰、下一次调用重建连接。要真正中断需要方言自己持有单条连接（`pool.getConnection()` → `conn.query()` → abort 时 `conn.destroy()`）
 - **卡片只覆盖四个工具**：`db_describe` 与 `db_explain` 走通用行（有意——收益低，而认领一个 wire 工具名就接管那个调用的全部状态）。要加，给工具加 `presentationMeta` 并在 `src/client/DbToolRows.tsx` 认领 key，两处都要动
 - **卡片认领即接管**：`tool.call.toolview` 是 keyed slot，注册 `db_query` 就接管该工具的**所有**状态渲染，包括还在跑、失败、嵌套分发——所以视图必须有回退分支（现在的四个都有）
 - **宽单元格会被裁到 320px**：列宽固定是「一列不要吃掉整屏」的取舍，代价是超过 320px 的单元格显示省略号——单个值的完整内容靠 hover（原生 tooltip）。整张卡被截断时（有 `已截断` 标记）卡片下方另有「显示完整结果」，展开的是这次调用的**结果全文**（取自会话记录，不必重新查库）
 - **数字列看起来是文本**：mysql2 对 BIGINT / DECIMAL 的默认映射就是字符串，卡片忠实呈现——`id` 是 `"156"`、`price` 是 `"45.00"`、且左对齐。要做数字右对齐就得往卡片元数据里加「列类型」，那会撑大本来就有上限的元数据，收益不值，记在这里当已知取舍
-- **卡片元数据按 UTF-8 字节计量**（16 KB，含卡片自身的字段）：触顶就少带几行并标 `已截断`，行数与条目数另有 50 / 100 的上限。中文一字三字节，所以行数上限与字节上限通常由后者先触发
+- **卡片元数据按 UTF-8 字节计量**（16 KB，含卡片自身的字段）：触顶就少带几行并标 `已截断`，行数与条目数另有 50 / 100 的上限。中文一字三字节，所以行数上限与字节上限通常由后者先触发。三条上限都随行配置走（`cardMaxBytes` / `cardMaxRows` / `cardMaxItems`），`src/card-budget.ts` 里的常量就是 schema 默认值的来源
 - **嵌套 / PTC 分发态未经真机验证**：本地工具集里没有 `run_code`，造不出嵌套调用。它由两道保证兜着——`dbCardModel` 在 `parentCallId` 有值时直接返回 `null`（嵌套调用拿不到 meta，核心只对顶层调用持久化 `presentationMeta`），这与第一方 search 卡片是同款实现。将来若拿到 PTC 环境，验收就是看嵌套的 `db_query` 是否落在通用行
 - **浏览器半边需要重新构建**：改 `src/client` 后必须 `npm run build`
+- **React 渲染没有自动测试**：`verify:cards` 覆盖的是客户端**卡片模型**（纯 Node、无 DOM），`verify:client` 覆盖的是浏览器半边 `apply` 的**注册与卸载**（同样无 DOM、无渲染）。设置页、四张卡片、弹窗的**渲染行为**仍没有自动化断言。改 `src/client/**` 之后请用浏览器过一遍：设置页的新建/编辑/测试连接、`db_query` 的结果表、`db_tables`/`db_databases` 的清单、截断时的「显示完整结果」、以及中英切换后的耗时文案
 - 作为仓外插件，它不参与 `deepseek-harness` 仓库的 gate（每文件 100% 覆盖率等）；`typecheck`、`npm test`、`verify:host`、`verify:settings`、`verify:loader`、`verify:cards` 是本工程自带的检查
 
 ## 许可

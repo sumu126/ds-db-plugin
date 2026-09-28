@@ -39,7 +39,7 @@
 - [`dialects/_template/`](./../dialects/_template/README.md) — 新方言起手骨架
 - [`dialects/mysql/src/index.ts`](./../dialects/mysql/src/index.ts) — 完整真实实现，写新方言时的参考
 
-## 当前状态（2026-09-22）
+## 当前状态（2026-09-24）
 
 | 里程碑 | 内容 | 状态 |
 | --- | --- | --- |
@@ -52,6 +52,8 @@
 | M6 | 可选工具 `db_sample` / `db_explain` 按能力注册；结果卡片（`presentationMeta` + `tool.call.toolview`）与 `verify:cards` | ✅ |
 
 新增文件：`src/dialect-audit.ts`（自检）、`src/dialect-catalog.ts`（已知方言包清单）。
+
+**AC6 已撤销**（2026-09-24）：多连接改造把用户文档的形状从平铺字段改成 `connections[]`，旧文档会被 schema 静默丢弃，工具回落到组合兜底。实测确认过（旧形状 → `127.0.0.1:3306`；同环境新形状 → 正确报出），又因两个包在 npm 上均为 404（从未发布、无安装基础），不为不存在的用户保留永久兼容读取路径。详见 PRD 的 AC6 行与 README「已知限制」。同一次复核还修掉了发布清单里一条从未按原文执行过的方言打包命令（`npm --prefix` 不换目录，会打出根包），并重新生成了腐烂的 `pnpm-lock.yaml`。
 
 ## 检查的归属（谁守什么）
 

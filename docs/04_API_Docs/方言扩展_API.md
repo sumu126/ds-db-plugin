@@ -27,16 +27,39 @@ dsh-dialect-postgres/
 
 ```ts
 import type { Context } from '@deepseek-ai/cordis'
+import z from '@deepseek-ai/schemastery'
 
 export const name = 'dsh-dialect-postgres'
 export const inject = ['databaseDialects']   // 注册表由 dsh-ds-db 提供
 
-export function apply(ctx: Context): void {
-  ctx.effect(() => ctx.databaseDialects.register(PG_DIALECT), 'postgres dialect')
+/** 驱动侧可调参数的声明；默认值写在 schema 里。 */
+export interface Config {
+  /** 每个连接保持打开的 socket 数。 @default 4 */
+  connectionLimit?: number
+}
+
+export const Config: z<Config> = z.object({
+  connectionLimit: z.natural().min(1).default(4),
+})
+
+export function apply(ctx: Context, config: Config = {}): void {
+  ctx.effect(() => ctx.databaseDialects.register(withPoolBounds(config)), 'postgres dialect')
 }
 ```
 
 注册是 effect：返回值即 disposer，插件卸载时方言自动摘除。同名重复注册会抛错。
+
+**驱动侧的可调参数属于方言自己的 `Config`**（连接池上限、驱动超时等）：它们随部署而变，不是数据库的事实。默认值写进 schema，取值写在方言行上：
+
+```yaml
+- insert:
+    - id: dialect-postgres
+      name: 'dsh-dialect-postgres'
+      config:
+        connectionLimit: 8
+```
+
+**不要**把这类取值写成模块常量：规范要求「凡不同部署可能取不同值的参数，都必须是配置字段」。
 
 安装：
 
@@ -46,7 +69,7 @@ dsh plugin --profile web add ./dsh-dialect-postgres
 
 ## 2. `DatabaseDialect` 接口（必须全部实现）
 
-定义于 `dsh-ds-db/src/dialect.ts`。
+定义于 `dsh-ds-db/dialect-api`（源码 `src/dialect.ts`，构建产物 `lib/dialect-api.js`）。
 
 ### 2.1 身份与文案
 

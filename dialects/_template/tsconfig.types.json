@@ -3,7 +3,7 @@
   "compilerOptions": {
     "paths": {
       "@deepseek-ai/cordis": ["../../../deepseek-harness/vendor/cordis/lib/types/index.d.ts"],
-      "dsh-ds-db/src/*": ["../../src/*"]
+      "dsh-ds-db/dialect-api": ["../../src/dialect-api.ts"]
     }
   }
 }

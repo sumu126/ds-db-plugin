@@ -16,12 +16,12 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { SHARED_FORBIDDEN, type ReadOnlyRules, type SqlLexical } from 'dsh-ds-db/src/sql-guard.ts'
-import type {
-  DatabaseConnection, DatabaseDialect, DialectCapability, DialectColumnRow,
-  DialectDatabaseRow, DialectIndexRow, DialectQuery, DialectSession, DialectStatement, DialectTableRow,
-} from 'dsh-ds-db/src/dialect.ts'
-import { cellText, type DbRow } from 'dsh-ds-db/src/value.ts'
+import {
+  cellText, SHARED_FORBIDDEN,
+  type DatabaseConnection, type DatabaseDialect, type DbRow, type DialectCapability,
+  type DialectColumnRow, type DialectDatabaseRow, type DialectIndexRow, type DialectQuery,
+  type DialectSession, type DialectStatement, type DialectTableRow, type ReadOnlyRules, type SqlLexical,
+} from 'dsh-ds-db/dialect-api'
 
 /** Stable Loader identity. TODO: rename. */
 export const name = 'dialect-template'

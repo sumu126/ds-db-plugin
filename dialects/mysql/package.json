@@ -19,9 +19,11 @@
     "mysql2": "^3.14.0"
   },
   "peerDependencies": {
+    "@deepseek-ai/schemastery": "*",
     "dsh-ds-db": "*"
   },
   "peerDependenciesMeta": {
+    "@deepseek-ai/schemastery": { "optional": true },
     "dsh-ds-db": { "optional": true }
   },
   "devDependencies": {

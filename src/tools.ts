@@ -18,7 +18,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { CARD_BYTES } from './card-budget.ts'
+import type { CardBudget } from './card-budget.ts'
 import type { ConnectionDefaults, ConnectionProfile, DatabaseSettings } from './contract.ts'
 import { connectionSummaries, resolveProfile } from './connections.ts'
 import type { DatabaseAccess } from './connection.ts'
@@ -44,6 +44,16 @@ export interface DatabaseToolsFace {
   described: DialectFacts
   /** The current settings section, holding every saved connection. */
   settings: () => DatabaseSettings
+  /** The bounds this deployment's card metadata is written under. */
+  cardBudget: CardBudget
+  /**
+   * Rows one `db_sample` call reads when it names none.
+   *
+   * Configuration rather than a constant because it is also written into the
+   * tool's model-facing description, so the text the model reads and the count
+   * it gets are the same number.
+   */
+  sampleRows: number
 }
 
 /**
@@ -67,12 +77,6 @@ type CardItem = {
   /** What it is, when the tool knows more than its name. */
   detail?: string
 }
-
-/** Rows one table card carries: the metadata is written into the session log. */
-const CARD_ROWS = 50
-
-/** Items one list card carries, for the same reason. */
-const CARD_ITEMS = 100
 
 /**
  * One value's size as it will be stored, in UTF-8 bytes rather than UTF-16 code
@@ -106,21 +110,23 @@ function cardRow(columns: readonly string[], row: DbJson): CardCell[] {
  * @param columns - the columns, in the order the server answered them.
  * @param rows - every row the tool answered with.
  * @param shell - bytes the card's own fields take, counted against the same bound.
+ * @param budget - the row and byte bounds this deployment writes cards under.
  * @returns the rows to draw, and whether anything was left out.
  */
 function cardRows(
   columns: readonly string[],
   rows: readonly DbJson[],
   shell: number,
+  budget: CardBudget,
 ): { rows: CardCell[][], truncated: boolean } {
   const kept: CardCell[][] = []
   // The whole card is stored as one value, so a body that fits while its header
   // does not is still a card over budget.
   let used = shell
-  for (const row of rows.slice(0, CARD_ROWS)) {
+  for (const row of rows.slice(0, budget.rows)) {
     const cells = cardRow(columns, row)
     const size = byteSize(cells)
-    if (used + size > CARD_BYTES) break
+    if (used + size > budget.bytes) break
     used += size
     kept.push(cells)
   }
@@ -131,14 +137,19 @@ function cardRows(
  * Bound a list card, and say whether it was cut.
  * @param items - every item the tool answered with.
  * @param shell - bytes the card's own fields take, counted against the same bound.
+ * @param budget - the item and byte bounds this deployment writes cards under.
  * @returns the items to draw, and whether anything was left out.
  */
-function cardItems(items: readonly CardItem[], shell: number): { items: CardItem[], truncated: boolean } {
+function cardItems(
+  items: readonly CardItem[],
+  shell: number,
+  budget: CardBudget,
+): { items: CardItem[], truncated: boolean } {
   const kept: CardItem[] = []
   let used = shell
-  for (const item of items.slice(0, CARD_ITEMS)) {
+  for (const item of items.slice(0, budget.items)) {
     const size = byteSize(item)
-    if (used + size > CARD_BYTES) break
+    if (used + size > budget.bytes) break
     used += size
     kept.push(item)
   }
@@ -204,7 +215,7 @@ function resolveDatabase(settings: ConnectionProfile, requested: string | undefi
  * @param face - the session runner, the dialect reader, and the settings reader every call uses.
  */
 export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void {
-  const { access, dialectFor, described, settings } = face
+  const { access, dialectFor, described, settings, cardBudget, sampleRows } = face
 
   /**
    * The connection one call addresses and the dialect it runs through, both in
@@ -262,6 +273,7 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
           // The card's own fields count too; `truncated` is measured at its
           // longest, so the bound holds whichever way the card ends up.
           byteSize({ card: 'list', label: 'databases', total: value.databases.length, truncated: true }),
+          cardBudget,
         )
         return {
           card: 'list',
@@ -331,6 +343,7 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
             card: 'list', label: 'tables', database: value.database,
             total: value.tables.length, truncated: true,
           }),
+          cardBudget,
         )
         return {
           card: 'list',
@@ -494,7 +507,7 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
           rowCount: value.rowCount,
           truncated: true,
           elapsedMs: value.elapsedMs,
-        }))
+        }), cardBudget)
         // Either bound cutting the card is the fact a reader needs, so the two
         // are one flag here: the tool's own row cap, and the card's own limits.
         return {
@@ -533,7 +546,7 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
         connection: CONNECTION_PARAMETER,
         table: { type: 'string', required: true, description: 'Table or view to read.' },
         database: { type: 'string', description: 'Database holding the table. Defaults to the default database of the connection in use.' },
-        rows: { type: 'integer', description: 'How many rows to read. Defaults to 5, and never exceeds the deployment row cap.' },
+        rows: { type: 'integer', description: `How many rows to read. Defaults to ${String(sampleRows)}, and never exceeds the deployment row cap.` },
       },
       output: {
         schema: {
@@ -544,6 +557,7 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
             table: { type: 'string', required: true },
             columns: { type: 'array', required: true, items: { type: 'string' } },
             rows: { type: 'array', required: true, items: { type: 'json' } },
+            elapsedMs: { type: 'integer', required: true },
           },
         },
         render: (_args, value) => [{
@@ -558,7 +572,8 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
             columns: value.columns,
             rowCount: value.rows.length,
             truncated: true,
-          }))
+            elapsedMs: value.elapsedMs,
+          }), cardBudget)
           return {
             card: 'table',
             database: value.database,
@@ -567,6 +582,7 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
             rows: card.rows,
             rowCount: value.rows.length,
             truncated: card.truncated,
+            elapsedMs: value.elapsedMs,
           }
         },
       },
@@ -578,10 +594,16 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
         const database = resolveDatabase(target, args.database, view)
         const table = args.table.trim()
         if (table.length === 0) throw new Error('table must be a non-empty name')
-        const requested = typeof args.rows === 'number' ? Math.floor(args.rows) : 5
+        const requested = typeof args.rows === 'number' ? Math.floor(args.rows) : sampleRows
         const rows = Math.min(Math.max(requested, 1), target.maxRows)
         const outcome = await access.query(target, sample(database, table, rows).statement.sql, [], exec.signal)
-        return { database, table, columns: outcome.columns, rows: outcome.rows }
+        return {
+          database,
+          table,
+          columns: outcome.columns,
+          rows: outcome.rows,
+          elapsedMs: outcome.elapsedMs,
+        }
       },
     }))
   }

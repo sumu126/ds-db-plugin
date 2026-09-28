@@ -36,7 +36,9 @@
   padding: 0 5px;
   border-radius: 4px;
   color: var(--dsw-alias-label-tertiary);
-  background: var(--dsw-alias-bg-layer-4);
+  /* Layer 2 is the highest rung the theme sheet defines, so a badge is a wash
+     of the surface under it rather than an undefined layer-4 name. */
+  background: var(--dsw-alias-bg-layer-2);
 }
 
 .plain {
@@ -45,7 +47,9 @@
   border-radius: 6px;
   background: var(--dsw-alias-bg-layer-2);
   color: var(--dsw-alias-label-secondary);
-  font-family: var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  /* The code face carries its own CJK-aware tail; a bare `monospace` fallback
+     would reintroduce the SimSun fallback it omits. */
+  font-family: var(--ds-font-family-code);
   font-size: 12px;
   white-space: pre-wrap;
   word-break: break-word;
@@ -128,7 +132,7 @@
 
 .itemName {
   color: var(--dsw-alias-label-primary);
-  font-family: var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--ds-font-family-code);
 }
 
 .itemDetail {

@@ -11,6 +11,7 @@
 /** Chinese dictionary; also the key source for the namespace. */
 export const zh = {
   rows: '{count} 行',
+  elapsed: '{ms} 毫秒',
   cut: '已截断',
   noColumns: '该语句没有返回列。',
   showFull: '显示完整结果',
@@ -24,6 +25,7 @@ export const zh = {
 /** English dictionary; every key mirrors {@link zh}. */
 export const en: typeof zh = {
   rows: '{count} rows',
+  elapsed: '{ms} ms',
   cut: 'cut',
   noColumns: 'The statement returned no columns.',
   showFull: 'Show the full result',

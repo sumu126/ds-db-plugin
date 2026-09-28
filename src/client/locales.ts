@@ -12,6 +12,7 @@ export const zh = {
   title: '数据库连接',
   description: '管理模型可以查询的只读数据库连接。密码保存在凭据存储中而不是这里，模型只能执行查询语句。标记为默认的连接是模型未指定连接时的目标。',
   newConnection: '新建连接',
+  editTitle: '编辑 {name}',
   empty: '还没有保存的连接。点击右上角「新建连接」添加一个。',
   readOnly: '当前设置文档为只读，修改无法保存。',
   unavailable: '主机没有提供数据库设置命名空间，该页面不可用。',
@@ -37,11 +38,11 @@ export const zh = {
   name: '连接名称',
   nameHint: '在卡片列表中显示的名字。',
   host: '主机',
-  hostHint: '数据库服务器地址，例如 127.0.0.1 或 db.internal。',
+  hostHint: '数据库服务器地址，例如 127.0.0.1 或 db.internal；留空表示由所选类型决定。',
   port: '端口',
-  portHint: '服务器 TCP 端口；新建时按所选类型的默认值预填。',
+  portHint: '服务器 TCP 端口；留空表示由所选类型决定，新建时按所选类型的默认值预填。',
   user: '账号',
-  userHint: '插件连接使用的账号，建议使用只有查询权限的只读账号。',
+  userHint: '插件连接使用的账号，建议使用只有查询权限的只读账号；留空表示由所选类型决定。',
   database: '默认数据库',
   databaseHint: '留空则不设默认库，此时每次工具调用都要指定数据库。',
   password: '密码',
@@ -66,6 +67,8 @@ export const zh = {
   testing: '测试中',
   testOk: '连接成功：{version}，耗时 {latency} 毫秒。',
   testFailed: '连接失败：{message}',
+  httpStatus: 'HTTP {status}',
+  noMessage: '主机没有说明原因',
 } as const
 
 /** English dictionary, keyed by the Chinese one. */
@@ -74,6 +77,7 @@ export const en: Record<keyof typeof zh, string> = {
   title: 'Database connections',
   description: 'Manage the read-only database connections the model can query. The password lives in the credential store rather than here, and the model can only run queries. The connection marked as default is the one a call that names none reaches.',
   newConnection: 'New connection',
+  editTitle: 'Edit {name}',
   empty: 'No connection is saved yet. Use "New connection" in the top right to add one.',
   readOnly: 'This settings document is read-only; changes cannot be saved.',
   unavailable: 'The host serves no database settings namespace, so this page is unavailable.',
@@ -99,11 +103,11 @@ export const en: Record<keyof typeof zh, string> = {
   name: 'Connection name',
   nameHint: 'The name shown on the card list.',
   host: 'Host',
-  hostHint: 'Database server address, such as 127.0.0.1 or db.internal.',
+  hostHint: 'Database server address, such as 127.0.0.1 or db.internal; leave empty to take the chosen type\'s own.',
   port: 'Port',
-  portHint: 'Server TCP port; a new connection is pre-filled from the chosen type.',
+  portHint: 'Server TCP port; leave empty to take the chosen type\'s own, and a new connection is pre-filled from it.',
   user: 'User',
-  userHint: 'Account the plugin connects as; a read-only account with SELECT privileges is the intended deployment.',
+  userHint: 'Account the plugin connects as; a read-only account with SELECT privileges is the intended deployment. Leave empty to take the chosen type\'s own.',
   database: 'Default database',
   databaseHint: 'Leave empty to keep every tool call naming its own database.',
   password: 'Password',
@@ -128,6 +132,8 @@ export const en: Record<keyof typeof zh, string> = {
   testing: 'Testing',
   testOk: 'Connected: {version} answered in {latency} ms.',
   testFailed: 'Connection failed: {message}',
+  httpStatus: 'HTTP {status}',
+  noMessage: 'the host gave no reason',
 }
 
 /** One dictionary key of the database settings page. */

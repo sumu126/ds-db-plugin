@@ -46,31 +46,75 @@ function readManifest(dir) {
 }
 
 /**
+ * Refuse a dialect that reaches into this repository's TypeScript source.
+ *
+ * Resolution runs before `external` is applied, so this also catches a specifier
+ * that would otherwise be inlined: bundling the core's read-only guard into a
+ * dialect would ship a second implementation of a security-relevant check.
+ */
+const refuseCoreSourceImports = {
+  name: 'refuse-core-source-imports',
+  setup(build) {
+    build.onResolve({ filter: /^dsh-ds-db\/src\// }, ({ importer, path }) => {
+      throw new Error(
+        `${importer} imports "${path}" — import "dsh-ds-db/dialect-api" instead: `
+        + 'it is the built API, and a deployment that loads this dialect has no TypeScript loader',
+      )
+    })
+  },
+}
+
+/**
+ * Refuse an emitted artifact that still imports a `.ts` module.
+ *
+ * The built dialect runs under the deployed `dsh`, which loads built JavaScript
+ * with no TypeScript loader: Node refuses to strip types under `node_modules`,
+ * so such an import fails at boot with the dialect row not activating. Failing
+ * the build here catches the specifiers resolution left alone, such as another
+ * package's TypeScript source named through an external pattern.
+ * @param file - the emitted artifact to check, absolute.
+ * @throws {Error} when it imports a TypeScript module.
+ */
+function assertNoTypeScriptImports(file) {
+  const source = readFileSync(file, 'utf8')
+  const match = /(?:from|import\s*\()\s*["']([^"']+\.ts)["']/.exec(source)
+  if (match === null) return
+  throw new Error(
+    `${file} imports TypeScript source "${match[1]}", which cannot load under the deployed dsh; `
+    + 'import "dsh-ds-db/dialect-api" (the built dialect API) instead',
+  )
+}
+
+/**
  * Build one dialect package.
  * @param dir - the package directory, absolute.
  * @param manifest - its parsed manifest.
  */
 async function buildDialect(dir, manifest) {
   // A dialect's driver is its own dependency, so it is external here; the
-  // plugin API is provided by the deployment that loads the dialect.
+  // plugin API is provided by the deployment that loads the dialect, as the
+  // built `dsh-ds-db/dialect-api` entry rather than its TypeScript source.
+  const outfile = 'lib/index.js'
   await build({
     absWorkingDir: dir,
     entryPoints: ['src/index.ts'],
-    outfile: 'lib/index.js',
+    outfile,
     bundle: true,
     format: 'esm',
     platform: 'node',
     target: 'node22',
     external: [
       'dsh-ds-db',
-      'dsh-ds-db/src/*',
+      'dsh-ds-db/dialect-api',
       '@deepseek-ai/*',
       ...Object.keys(manifest.dependencies ?? {}),
       ...Object.keys(manifest.peerDependencies ?? {}).filter(name => name !== 'dsh-ds-db'),
     ],
+    plugins: [refuseCoreSourceImports],
     sourcemap: true,
     logLevel: 'info',
   })
+  assertNoTypeScriptImports(join(dir, outfile))
 }
 
 // A relative argument resolves against the caller, so the two documented ways to

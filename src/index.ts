@@ -19,15 +19,19 @@ import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type {} from '@deepseek-ai/dsh-credentials'
 import type {} from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-tools'
+// Type-only: pulls the connection service's Context merge (ctx.connection) and
+// the Fetch-route types the two probe endpoints register through.
+import type { HostConnectionHandle } from '@deepseek-ai/dsh-client-connection'
+import { CARD_BUDGET, type CardBudget } from './card-budget.ts'
 import { DatabaseAccess, SESSION_LIMIT } from './connection.ts'
 import { activeConnection } from './connections.ts'
 import {
   DB_DIALECTS_PATH, DB_SETTINGS_NAMESPACE, DB_TEST_PATH, UNSET_PORT,
-  type ConnectionProfile, type DatabaseSettings, type DialectCatalog, type ProbeRequest,
+  type ConnectionProfile, type DatabaseSettings, type DialectCatalog, type KnownDialectPackage, type ProbeRequest,
 } from './contract.ts'
-import { KNOWN_DIALECT_PACKAGES } from './dialect-catalog.ts'
+import { SHIPPED_DIALECT_PACKAGES } from './dialect-catalog.ts'
 import { DatabaseDialectRegistry, dialectFacts, resolveDialect, type DatabaseConnection, type DatabaseDialect } from './dialect.ts'
-import { compositionEntry, Config, DatabaseSettingsSchema } from './settings.ts'
+import { compositionEntry, Config, DatabaseSettingsSchema, DIALECT_WAIT_MS, SAMPLE_ROWS } from './settings.ts'
 import { applyDatabaseTools } from './tools.ts'
 
 export type { ConnectionProfile, DatabaseSettings } from './contract.ts'
@@ -44,15 +48,6 @@ export const name = 'ds-db'
 /** The tool registry is the one service this plugin cannot work without. */
 export const inject = ['tools']
 
-/**
- * How long tool registration waits for the configured dialect package.
- *
- * Long enough for a sibling row of the same patch to activate, short enough
- * that a missing package still ends with registered tools and a refusal naming
- * what is available.
- */
-const DIALECT_WAIT_MS = 100
-
 /** Connection test response the settings page renders. */
 interface ProbePayload {
   /** Whether the connection answered. */
@@ -65,18 +60,6 @@ interface ProbePayload {
   message?: string
 }
 
-/** The slice of the browser-connection service this plugin registers a route on. */
-interface ProbeHost {
-  fetch: {
-    register(route: {
-      path: string
-      methods: readonly string[]
-      requestBody: 'buffered' | 'streaming'
-      fetch: (request: Request) => Promise<Response>
-    }): () => Promise<void>
-  }
-}
-
 /**
  * Register the settings namespace, the dialect registry, the read-only tools,
  * and the page's connection probes.
@@ -85,17 +68,36 @@ interface ProbeHost {
  */
 export function apply(ctx: Context, config: Config): void {
   const entry = compositionEntry(config)
+  // The bounds a call's card metadata is written under; the schema supplies the
+  // defaults, and the constants beside them keep a direct caller without one
+  // resolved to the same numbers.
+  const cardBudget: CardBudget = {
+    bytes: config.cardMaxBytes ?? CARD_BUDGET.bytes,
+    rows: config.cardMaxRows ?? CARD_BUDGET.rows,
+    items: config.cardMaxItems ?? CARD_BUDGET.items,
+  }
   // The settings source is a thunk, not a snapshot: the provider hands it over
   // once, and every operation reads through it so a committed change (or a
   // provider detach) reaches the next tool call.
+  //
+  // A section that resolves to no connection falls back to the composition
+  // entry, because a stored section holds only what the user changed: a
+  // document carrying the schema's empty `connections` would otherwise leave
+  // every tool with nothing to address, even though the deployment configured a
+  // connection in `cordis.yml`.
   let readSettings: () => DatabaseSettings = () => entry
+  const withCompositionFallback = (source: () => DatabaseSettings): (() => DatabaseSettings) =>
+    () => {
+      const resolved = source()
+      return resolved.connections.length > 0 ? resolved : entry
+    }
 
   // The settings provider is optional: without one the composition entry is
   // the whole configuration, and the configuration page reports the namespace
   // as unavailable rather than editing a section nobody serves.
   ctx.inject(['settings'], (settingsCtx) => {
     settingsCtx.settings.installSection(ctx, DB_SETTINGS_NAMESPACE, DatabaseSettingsSchema, entry, {
-      setSource: (source) => { readSettings = source },
+      setSource: (source) => { readSettings = withCompositionFallback(source) },
       // Nothing is derived from the source besides the reads above.
       onChange: () => {},
     })
@@ -119,7 +121,7 @@ export function apply(ctx: Context, config: Config): void {
     // warnings go, not to the process stream behind the harness's back.
     warn: (message) => { ctx.logger.warn(message) },
   }, config.sessionLimit ?? SESSION_LIMIT)
-  ctx.effect(() => () => { void access.dispose() }, 'ds-db: database session')
+  ctx.effect(() => () => access.dispose(), 'ds-db: database session')
   // Model-facing descriptions are fixed when the tools are registered, so they
   // are written from the dialect's own facts rather than from its name. The
   // dialect package therefore has to be registered first, and it always loads
@@ -141,6 +143,8 @@ export function apply(ctx: Context, config: Config): void {
       // settings provider hands its source over, so passing the value would pin
       // the tools to the composition entry forever.
       settings: () => readSettings(),
+      cardBudget,
+      sampleRows: config.sampleRows ?? SAMPLE_ROWS,
     })
   }
   ctx.effect(() => {
@@ -163,8 +167,9 @@ export function apply(ctx: Context, config: Config): void {
   // so the page calls them with a plain `fetch` and the wire shapes are written
   // out in `contract.ts`.
   ctx.inject(['connection'], (webCtx) => {
-    const connection = Reflect.get(webCtx, 'connection') as ProbeHost | undefined
-    if (connection === undefined) return
+    // The injection is the wait: this callback runs once the carrier is served,
+    // so the handle is here and its Fetch routes need no second check.
+    const connection: HostConnectionHandle = webCtx.connection
     webCtx.effect(() => connection.fetch.register({
       path: DB_TEST_PATH,
       methods: ['POST'],
@@ -176,14 +181,21 @@ export function apply(ctx: Context, config: Config): void {
 
     // The page's type chooser reads the registered dialects from here, so a
     // dialect that arrives in its own package shows up without this plugin
-    // knowing its name in advance.
+    // knowing its name in advance. The hint list is a deployment's, because a
+    // package published outside this repository is one this plugin cannot name.
     webCtx.effect(() => connection.fetch.register({
       path: DB_DIALECTS_PATH,
       methods: ['GET'],
       requestBody: 'buffered',
-      fetch: async (): Promise<Response> => Response.json(dialectCatalog(registry), {
-        headers: { 'cache-control': 'no-store' },
-      }),
+      fetch: async (): Promise<Response> => {
+        const configured = config.knownDialectPackages
+        const hints = configured !== undefined && configured.length > 0
+          ? configured
+          : SHIPPED_DIALECT_PACKAGES
+        return Response.json(dialectCatalog(registry, hints), {
+          headers: { 'cache-control': 'no-store' },
+        })
+      },
     }), `ds-db: GET ${DB_DIALECTS_PATH}`)
   })
 }
@@ -192,9 +204,14 @@ export function apply(ctx: Context, config: Config): void {
  * Describe every database type the page may offer: what is registered here, and
  * what a deployment could install.
  * @param registry - the dialects registered in this deployment.
+ * @param knownHints - the packages to hint when they are not registered; a
+ * deployment that publishes its own dialect names it here.
  * @returns the catalog the type chooser renders.
  */
-export function dialectCatalog(registry: DatabaseDialectRegistry): DialectCatalog {
+export function dialectCatalog(
+  registry: DatabaseDialectRegistry,
+  knownHints: readonly KnownDialectPackage[] = SHIPPED_DIALECT_PACKAGES,
+): DialectCatalog {
   const installed = registry.names()
     .map((name) => {
       const dialect = registry.get(name)
@@ -220,7 +237,7 @@ export function dialectCatalog(registry: DatabaseDialectRegistry): DialectCatalo
       }
     })
     .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined)
-  const known = KNOWN_DIALECT_PACKAGES
+  const known = knownHints
     .filter(entry => !installed.some(dialect => dialect.name === entry.name))
   return { installed, known }
 }

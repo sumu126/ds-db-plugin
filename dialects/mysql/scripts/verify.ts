@@ -5,7 +5,7 @@
  *   npm run verify
  */
 import assert from 'node:assert/strict'
-import { auditDialect } from 'dsh-ds-db/src/dialect-audit.ts'
+import { auditDialect } from 'dsh-ds-db/dialect-api'
 import { MYSQL_DIALECT } from '../src/index.ts'
 
 const problems = auditDialect(MYSQL_DIALECT)

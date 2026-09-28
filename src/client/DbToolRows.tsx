@@ -20,7 +20,7 @@ import type { ToolCallViewProps } from '@deepseek-ai/dsh-client-ui-tool/client'
 import type { ToolCallBlock } from '@deepseek-ai/dsh-client-ui-chat/client'
 import { TOOL_ROW_KEYS, callText, dbCardModel, errorText, type ListCard, type TableCard } from './card-model.ts'
 import { TOOL_NS } from './tool-locales.ts'
-import styles from './db-rows.css'
+import styles from './db-rows.module.css'
 
 /** Props the renderer binds for one row this plugin owns. */
 type DbRowProps = ToolCallViewProps & PropsLocale<typeof TOOL_NS>
@@ -81,7 +81,7 @@ function TableView({ card, t }: { card: TableCard, t: Translate }) {
         <span className={styles.title}>{title}</span>
         <span className={styles.count}>{t('rows', { count: String(card.rowCount) })}</span>
         {card.truncated ? <span className={styles.badge}>{t('cut')}</span> : null}
-        {card.elapsedMs === undefined ? null : <span className={styles.count}>{`${String(card.elapsedMs)} ms`}</span>}
+        {card.elapsedMs === undefined ? null : <span className={styles.count}>{t('elapsed', { ms: String(card.elapsedMs) })}</span>}
       </div>
       {card.columns.length === 0
         ? <p className={styles.note}>{t('noColumns')}</p>

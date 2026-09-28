@@ -12,11 +12,11 @@ import { UNSET_PORT, type ConnectionDefaults, type ConnectionProfile, type Datab
 
 /** What one saved connection really reaches, once its dialect's defaults apply. */
 export interface EffectiveConnection {
-  /** Server host name or address. */
+  /** Server host name or address; empty when neither the profile nor the dialect names one. */
   host: string
-  /** Server TCP port, always a real port. */
+  /** Server TCP port, or {@link UNSET_PORT} when neither the profile nor the dialect names one. */
   port: number
-  /** Account to connect as. */
+  /** Account to connect as; empty when neither the profile nor the dialect names one. */
   user: string
   /** Default database, empty when every call names one. */
   database: string
@@ -29,8 +29,11 @@ export interface EffectiveConnection {
  *
  * A field the profile leaves empty falls back to what its dialect declares,
  * exactly as a call resolves it — so a page and a tool never disagree about
- * where a connection points. `port` is always a real port here: `0` means "the
- * dialect's", and a dialect that declares none is a refusal at call time.
+ * where a connection points. A field neither of them fills stays empty here,
+ * exactly as a call meeting it refuses: `port` keeps {@link UNSET_PORT}, and the
+ * host and the account stay empty strings. Nothing here invents a value the
+ * server was never told, because a page that printed one would offer to save
+ * something the call would not have used.
  * @param profile - the saved connection.
  * @param defaults - what the profile's dialect declared, if anything.
  * @returns the values to show and to connect with.

@@ -151,6 +151,7 @@ export class DatabaseAccess {
    * Run one dialect query and project its rows onto the shape it promises.
    * @param profile - the saved connection the call addresses.
    * @param query - the query to run.
+   * @param signal - the caller's cancellation, handed to the driver.
    * @returns one entry per row the server answered.
    * @throws {Error} when the server refuses the statement or the session cannot reach it.
    */
@@ -164,6 +165,7 @@ export class DatabaseAccess {
    * @param profile - the saved connection the call addresses.
    * @param sql - the statement to execute, in the dialect's own placeholder style.
    * @param values - values the dialect's driver binds.
+   * @param signal - the caller's cancellation, handed to the driver.
    * @returns the bounded, JSON-safe outcome.
    * @throws {Error} when the server refuses the statement or the session cannot reach it.
    */

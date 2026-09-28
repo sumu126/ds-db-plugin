@@ -13,7 +13,7 @@
 import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { SettingsPathOpView } from '@deepseek-ai/dsh-api-remotes/client'
 import type { SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client'
-import { DEFAULT_PASSWORD_REF, type ConnectionProfile, type DatabaseSettings, type DialectCatalog, type DialectDescriptor } from '../contract.ts'
+import { UNSET_PORT, DEFAULT_PASSWORD_REF, type ConnectionProfile, type DatabaseSettings, type DialectCatalog, type DialectDescriptor } from '../contract.ts'
 import { effectiveConnection, type EffectiveConnection } from '../connections.ts'
 
 /**
@@ -148,15 +148,67 @@ function positiveInteger(text: string): number | undefined {
   return value >= 1 ? value : undefined
 }
 
+/** Whether a draft text is a whole number a port may take: empty or `0` mean "the dialect's". */
+function wholePort(text: string): number | undefined {
+  const trimmed = text.trim()
+  if (trimmed.length === 0) return UNSET_PORT
+  const value = positiveInteger(trimmed)
+  // A typed `0` is the sentinel spelled out, which is what it means anyway; a
+  // number past the port range is still a typo rather than a request.
+  if (value === undefined) return trimmed === '0' ? UNSET_PORT : undefined
+  return value <= 65535 ? value : undefined
+}
+
+/**
+ * The port a card prints, and the draft text the form opens on.
+ *
+ * {@link UNSET_PORT} is a sentinel — "the dialect's own, and it declares none
+ * here" — not a port a server listens on, so it is never shown: a card prints no
+ * port at all and the form opens on an empty box, which is also what saving the
+ * box back writes. Printing the raw `0` is what made an uneditable connection:
+ * the card read `:0` and the form opened on a port the rules refused.
+ * @param port - the resolved port, or {@link UNSET_PORT}.
+ * @returns the port as it is typed, empty when there is none to type.
+ */
+export function portText(port: number): string {
+  return port === UNSET_PORT ? '' : String(port)
+}
+
+/**
+ * The port one box holds; the inverse of {@link portText}, and the only reader of
+ * the box, so an empty one and a `0` both come back as {@link UNSET_PORT}.
+ * @param text - the draft text of the port box.
+ * @returns the port, or undefined while the box holds something that is not one.
+ */
+export function portValue(text: string): number | undefined {
+  return wholePort(text)
+}
+
+/**
+ * The endpoint line one card shows: where the connection reaches, without the
+ * sentinel.
+ *
+ * Every part is optional, so nothing is printed for a part that has no value —
+ * no `:0` for an unset port and no dangling ` · ` for an empty account.
+ * @param connection - the values a saved connection really uses.
+ * @returns the line as the card renders it.
+ */
+export function endpointText(connection: Pick<EffectiveConnection, 'host' | 'port' | 'user'>): string {
+  const host = connection.host.trim()
+  const user = connection.user.trim()
+  const address = connection.port === UNSET_PORT ? host : `${host}:${String(connection.port)}`
+  return user.length === 0 ? address : `${address} · ${user}`
+}
+
 /** The validity rule per dialog field. */
 const RULES: Record<DbFormField, (text: string) => boolean> = {
   name: text => text.trim().length > 0,
-  host: text => text.trim().length > 0,
-  port: (text) => {
-    const value = positiveInteger(text)
-    return value !== undefined && value <= 65535
-  },
-  user: text => text.trim().length > 0,
+  // A host, a port and an account are facts about one server, and the dialect is
+  // the only authority on whether it declares one: an empty box here is a
+  // question for the dialect at call time, not a refusal at save time.
+  host: () => true,
+  port: text => wholePort(text) !== undefined,
+  user: () => true,
   // An empty database is meaningful: it means every tool call names its own.
   database: () => true,
   passwordEnv: text => /^[A-Za-z_][A-Za-z0-9_]*$/.test(text.trim()),
@@ -178,27 +230,47 @@ export const FIELD_INVALID_KEY: Record<DbFormField, 'invalidText' | 'invalidNumb
   maxRows: 'invalidNumber',
 }
 
-/** Whether every dialog field holds a value its rule accepts. */
+/**
+ * Whether every dialog field holds a value its rule accepts.
+ * @param dialog - the dialog draft to judge.
+ * @returns whether every field's text passes its own rule.
+ */
 export function dialogValid(dialog: DbDialog): boolean {
   if (dialog.kind !== 'form') return false
   return DB_FORM_FIELDS.every(field => RULES[field](dialog.fields[field]))
 }
 
-/** Whether one field's draft text is not a value its rule accepts. */
+/**
+ * Whether one field's draft text is not a value its rule accepts.
+ * @param field - the field whose rule judges the text.
+ * @param text - the draft text of that field.
+ * @returns whether the text fails that field's rule.
+ */
 export function fieldInvalid(field: DbFormField, text: string): boolean {
   return !RULES[field](text)
 }
 
-/** The saved profile the dialog's draft parses to, or undefined while invalid. */
+/**
+ * The saved profile the dialog's draft parses to, or undefined while invalid.
+ *
+ * The parse is the exact inverse of {@link editDraftFor}: an empty port box is
+ * {@link UNSET_PORT} and an empty host or account stays empty, so opening a
+ * connection and saving it unchanged writes back what it already held rather
+ * than a `0` or a value the dialect would have supplied anyway.
+ * @param dialog - the dialog draft to parse.
+ * @returns the profile it describes, or undefined while any field is invalid.
+ */
 export function dialogProfile(dialog: DbDialog): ConnectionProfile | undefined {
   if (dialog.kind !== 'form' || !dialogValid(dialog)) return undefined
+  const port = portValue(dialog.fields.port)
+  if (port === undefined) return undefined
   return {
     id: dialog.id,
     name: dialog.fields.name.trim(),
     dialect: dialog.dialect,
     extra: { ...dialog.extra },
     host: dialog.fields.host.trim(),
-    port: Number(dialog.fields.port.trim()),
+    port,
     user: dialog.fields.user.trim(),
     database: dialog.fields.database.trim(),
     passwordEnv: dialog.fields.passwordEnv.trim(),
@@ -219,7 +291,8 @@ function freshId(): string {
  *
  * A port and an account are facts about one server, so the page takes them from
  * the dialect's own defaults; a dialect that names none leaves the box empty,
- * and an empty box blocks the save rather than letting the plugin guess.
+ * and an empty box stays a question for the dialect at call time rather than a
+ * value the plugin guesses.
  * @param descriptor - the chosen type, as the Host described it.
  * @param dialect - the type's registry key, used when it names no label.
  * @returns the draft text per shared field.
@@ -229,7 +302,7 @@ function blankFields(descriptor: DialectDescriptor | undefined, dialect: string)
   return {
     name: descriptor?.label ?? dialect,
     host: defaults.host ?? '127.0.0.1',
-    port: defaults.port === undefined ? '' : String(defaults.port),
+    port: portText(defaults.port ?? UNSET_PORT),
     user: defaults.user ?? '',
     database: defaults.database ?? '',
     passwordEnv: defaults.passwordEnv ?? DEFAULT_PASSWORD_REF,
@@ -255,7 +328,7 @@ export function editDraftFor(profile: ConnectionProfile, catalog?: DialectCatalo
   const fields: Record<DbFormField, string> = {
     name: profile.name,
     host: effective.host,
-    port: String(effective.port),
+    port: portText(effective.port),
     user: effective.user,
     database: effective.database,
     passwordEnv: effective.passwordEnv,

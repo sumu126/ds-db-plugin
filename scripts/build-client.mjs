@@ -4,8 +4,8 @@
  * through the module table the shell seeds.
  *
  * CSS goes through the same CSS Modules pipeline the shipped client packages
- * use (local names hashed, one injected style tag), so the page's class names
- * cannot collide with another plugin's.
+ * use (`.module.css` sources, local names hashed, one injected style tag), so
+ * the page's class names cannot collide with another plugin's.
  */
 import { readFileSync } from 'node:fs'
 import { basename, dirname, resolve } from 'node:path'

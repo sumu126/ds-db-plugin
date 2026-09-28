@@ -1,7 +1,10 @@
 /**
- * Build the Node half into one ESM artifact the harness loader can import from
- * an installed package: harness packages and the driver stay external, and
- * inlining our own modules keeps the artifact free of relative `.ts` imports.
+ * Build the Node half into the ESM artifacts the harness loader imports from an
+ * installed package: the plugin itself, and the dialect-author API a separately
+ * installed dialect package imports. Harness packages and the driver stay
+ * external, and inlining our own modules keeps the artifacts free of relative
+ * `.ts` imports — a dialect that reached this package's TypeScript source would
+ * not load under the deployed `dsh`.
  */
 import { build } from 'esbuild'
 import { dirname, resolve } from 'node:path'
@@ -11,8 +14,8 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
 await build({
   absWorkingDir: root,
-  entryPoints: ['src/index.ts'],
-  outfile: 'lib/index.js',
+  entryPoints: { index: 'src/index.ts', 'dialect-api': 'src/dialect-api.ts' },
+  outdir: 'lib',
   bundle: true,
   format: 'esm',
   platform: 'node',

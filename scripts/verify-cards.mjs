@@ -23,6 +23,9 @@ import * as mysqlReadOnly from '../src/index.ts'
 import * as mysqlDialect from '../dialects/mysql/src/index.ts'
 import { TOOL_ROW_KEYS, callText, dbCardModel, errorText, genericText } from '../src/client/card-model.ts'
 import { CARD_BYTES } from '../src/card-budget.ts'
+import { DEFAULT_PASSWORD_REF, UNSET_PORT } from '../src/contract.ts'
+import { effectiveConnection } from '../src/connections.ts'
+import { dialogProfile, dialogValid, editDraftFor, endpointText, fieldInvalid, portText, portValue } from '../src/client/form.ts'
 
 const ctx = new Context()
 await ctx.plugin(SystemPrompt, {})
@@ -108,7 +111,7 @@ console.log('round trip: db_databases listing read back')
 // A header never shows a wire tool name: a card that knows what it read says the
 // name, and one that does not falls back to copy a dictionary carries.
 const sampleCard = dbCardModel(settledCall(metaOf('db_sample', { table: 'events' }, {
-  database: 'app', table: 'events', columns: ['id'], rows: [[1]],
+  database: 'app', table: 'events', columns: ['id'], rows: [[1]], elapsedMs: 7,
 })))
 const tablesCard = dbCardModel(settledCall(metaOf('db_tables', { database: 'app' }, {
   database: 'app', tables: [{ name: 'events', type: 'BASE TABLE', engine: 'InnoDB', estimatedRows: 3, comment: '' }],
@@ -116,6 +119,7 @@ const tablesCard = dbCardModel(settledCall(metaOf('db_tables', { database: 'app'
 assert.equal(queryCard.title.scope, undefined, 'a bare query has no name of its own')
 assert.equal(queryCard.title.key, 'result', 'so it falls back to the copy for a query result')
 assert.equal(sampleCard.title.scope, 'app.events', 'a sample says what it read')
+assert.equal(sampleCard.elapsedMs, 7, 'a sample carries the time the server took')
 assert.equal(databasesCard.title.key, 'databases', 'a listing says what it lists')
 assert.equal(tablesCard.title.key, 'tables')
 assert.equal(tablesCard.title.scope, undefined)
@@ -222,6 +226,80 @@ assert.equal(wideMeta.truncated, true, 'a card of wide CJK cells says it was cut
 assert.ok(wideMeta.rows.length < 50, 'the byte bound cut it before the row bound did')
 assert.ok(wideBytes <= CARD_BYTES, `a card of CJK text stays within the bound (${String(wideBytes)} bytes)`)
 console.log(`bounds: ${String(manyMeta.rows.length)} of 500 rows, ${String(wideMeta.rows.length)} of 200 wide rows, ${String(wideBytes)} utf8 bytes`)
+
+/**
+ * A saved connection in the shape the composition layer writes one: the shared
+ * fields, with the port and the account left to the dialect unless overridden.
+ * @param overrides - the fields this case wants filled in.
+ * @returns the saved connection.
+ */
+function profileOf(overrides) {
+  return {
+    id: 'default',
+    name: 'default',
+    dialect: '',
+    extra: {},
+    host: '127.0.0.1',
+    port: UNSET_PORT,
+    user: '',
+    database: '',
+    passwordEnv: DEFAULT_PASSWORD_REF,
+    connectTimeoutMs: 10_000,
+    queryTimeoutMs: 30_000,
+    maxRows: 200,
+    ...overrides,
+  }
+}
+
+// A saved connection whose port and account come from the dialect is the shape
+// the composition layer really writes (`SHARED_DEFAULTS`), and the card and the
+// edit form have to agree about it. Printing the raw sentinel is the defect this
+// pins: a card that read `127.0.0.1:0 · ` and a form that opened on a port the
+// rules refused, so its Save stayed greyed out forever.
+const dialectDefaults = { host: '', port: 3306, user: 'root' }
+const withPortAndUser = effectiveConnection(profileOf({ port: 3307, user: 'reader' }), dialectDefaults)
+const unsetPort = effectiveConnection(profileOf({}), undefined)
+const emptyUser = effectiveConnection(profileOf({ port: 5432 }), undefined)
+const cases = [
+  { name: 'port and user both set', resolved: withPortAndUser, shown: '127.0.0.1:3307 · reader' },
+  { name: `port is UNSET_PORT (${String(UNSET_PORT)})`, resolved: unsetPort, shown: '127.0.0.1' },
+  { name: 'user is empty', resolved: emptyUser, shown: '127.0.0.1:5432' },
+]
+for (const { name, resolved, shown } of cases) {
+  const endpoint = endpointText(resolved)
+  assert.equal(endpoint, shown, `${name}: the card prints "${shown}"`)
+  assert.equal(endpoint.includes(':0'), false, `${name}: the card never prints the sentinel port`)
+  assert.equal(/\s·\s$|·\s*$/.test(endpoint), false, `${name}: the card never leaves a dangling separator`)
+  console.log(
+    `endpoint [${name}]: port=${String(resolved.port)} user=${JSON.stringify(resolved.user)}`
+    + ` -> ${JSON.stringify(endpoint)}`,
+  )
+}
+
+// The round trip is what makes the edit form usable at all: what the form opens
+// on has to be a value the rules accept and the save writes back unchanged.
+const unsetProfile = profileOf({})
+const opened = editDraftFor(unsetProfile)
+assert.equal(opened.fields.port, '', 'an unset port opens the box empty, not on "0"')
+assert.equal(opened.fields.user, '', 'an empty account opens the box empty')
+assert.equal(dialogValid(opened), true, 'a connection with no port or account is saveable')
+assert.deepEqual(dialogProfile(opened), unsetProfile, 'opening and saving it unchanged writes back the same profile')
+assert.equal(portText(UNSET_PORT), '', 'the sentinel has no text of its own')
+assert.equal(portText(3306), '3306', 'a real port keeps its text')
+assert.equal(portValue(''), UNSET_PORT, 'an empty box parses back to the sentinel')
+assert.equal(portValue(' '), UNSET_PORT, 'a blank box parses back to the sentinel')
+assert.equal(portValue('3306'), 3306, 'a typed port parses back to itself')
+assert.equal(portValue('0'), UNSET_PORT, 'a typed 0 is the sentinel, which the sentinel means anyway')
+assert.equal(fieldInvalid('port', '70000'), true, 'a port past 65535 is still refused')
+assert.equal(fieldInvalid('port', 'abc'), true, 'a port that is not a number is still refused')
+assert.equal(fieldInvalid('name', '  '), true, 'a name is still required')
+assert.equal(fieldInvalid('host', ''), false, 'an empty host is the dialect\'s question, not the form\'s')
+assert.equal(fieldInvalid('user', ''), false, 'an empty account is the dialect\'s question, not the form\'s')
+console.log(
+  `round trip: UNSET_PORT -> "${portText(UNSET_PORT)}" -> ${String(portValue(''))};`
+  + ` edit form opens port=${JSON.stringify(opened.fields.port)} user=${JSON.stringify(opened.fields.user)}`
+  + ` and saves back port=${String(dialogProfile(opened).port)} user=${JSON.stringify(dialogProfile(opened).user)}`,
+)
 
 await ctx.fiber.dispose()
 console.log('card check passed')
