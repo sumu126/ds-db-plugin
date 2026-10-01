@@ -90,7 +90,9 @@ pnpm install --no-frozen-lockfile      # 必须 pnpm：方言依赖用 workspace
 npm run build                          # 产出 lib/index.js（host）、lib/client.js（浏览器半边）与 lib/types/**（类型声明；旁边没有已构建的 harness 时这一步自动跳过，见「给插件开发者」）
 ```
 
-> **必须用 pnpm。** `dsh-dialect-mysql` 以 `workspace:^` 声明——本地是同仓链接，`pnpm pack` / `pnpm publish` 时才会被改写成版本号；npm 会直接以 `EUNSUPPORTEDPROTOCOL "workspace:"` 拒绝。注意改写**只发生在 pack/publish**：从 git URL 安装（`dsh plugin add github:sumu126/ds-db-plugin`、`pnpm add git+https://…`）拿到的是原样清单，会以 `ERR_PNPM_WORKSPACE_PKG_NOT_FOUND` 失败（**已复现**）——方言包在消费者侧的工作区里不可见。本项目**不发布到 npm**（两个包的清单都带 `private: true`，`npm publish` 会直接拒绝），所以 git-URL 与按包名一条命令安装都不提供；从仓库装载只有 A（clone + `--patch`）与 B（pack 成 tgz 装进 profile）两条路。
+> **必须用 pnpm。** `dsh-dialect-mysql` 以 `workspace:^` 声明——本地是同仓链接，`pnpm pack` / `pnpm publish` 时才会被改写成版本号；npm 会直接以 `EUNSUPPORTEDPROTOCOL "workspace:"` 拒绝。注意改写**只发生在 pack/publish**：从 git URL 安装（`dsh plugin add github:sumu126/ds-db-plugin`、`pnpm add git+https://…`）拿到的是原样清单，会以 `ERR_PNPM_WORKSPACE_PKG_NOT_FOUND` 失败（**已复现**）——方言包在消费者侧的工作区里不可见。
+>
+> **本项目的发行形态是 tarball，不是 git-URL。** 框架本身支持 `dsh plugin add github:<owner>/<repo>`（要求作者的 `prepare` 自包含——那半边本仓已满足，见下），但那条路要求**每个包自包含**；本仓是「核心 + 方言包」的 workspace 双包结构，核心对仓内方言的 `workspace:` 依赖在消费者的工作区里没有对应包，因此 git-URL 形态不满足。本项目也**不发布到 npm**（两个清单都带 `private: true`，`npm publish` 被物理拒绝）。所以从本仓装载走 **A**（clone + `--patch`）或 **B**（`pnpm pack` 出两个 tgz 装进 profile）；两条都是官方文档认可的形态，B 正是「交付 tarball」那条免授权路径。
 >
 > 仓库根还有一条相关配置：`pnpm-workspace.yaml` 里的 `autoInstallPeers: false`。本插件声明的 `@deepseek-ai/*` 全是**宿主运行时提供**的 optional peer，它们没有发布到 npm，包管理器去装只会失败——这条配置就是把这个默认行为关掉。
 
@@ -329,7 +331,7 @@ cd <你的方言目录> && git init && npm run verify && npm publish
 | 现象 | 原因 |
 | --- | --- |
 | `npm install` 报 `EUNSUPPORTEDPROTOCOL "workspace:"` | 依赖用 `workspace:` 声明，只能用 pnpm 装（发布产物里已被改写成版本号） |
-| git-URL 安装报 `ERR_PNPM_WORKSPACE_PKG_NOT_FOUND: dsh-dialect-mysql` | pnpm 对 git 依赖**不改写** `workspace:`（只有 pack/publish 改写），装进 profile 的工作区后找不到这个包。本项目不发布 npm，git-URL 安装不提供——走 A（`--patch`）或 B（tgz + overrides） |
+| git-URL 安装报 `ERR_PNPM_WORKSPACE_PKG_NOT_FOUND: dsh-dialect-mysql` | 框架支持 git-URL 安装，但要求包**自包含**；本仓是核心+方言的双包 workspace，pnpm 对 git 依赖**不改写** `workspace:`（只有 pack/publish 改写），消费者工作区里没有这个包。本仓发行形态是 tarball——走 A（`--patch`）或 B（tgz + overrides） |
 | `pnpm install` 一直重试解析 `@deepseek-ai/dsh-*` | 那些是宿主提供的 optional peer，仓库已用 `autoInstallPeers: false` 关掉自动安装；仍出现说明你不在本仓库根目录 |
 | 调用报「dialect X is not registered」 | 你的包没被加载；用 `dsh --dump-config` 确认那一层在 |
 | 工具描述里还是旧的自称 | 已知行为：描述注册时写定，重载后更新；**调用不受影响** |
@@ -503,7 +505,7 @@ pnpm install --frozen-lockfile                                             # 一
 
 - **破坏性变更：多连接改造之前的用户文档不再被读取**。设置页保存的连接从「平铺字段」改成了 `connections[]`，旧文档里的 `ds-db.host` / `port` / `user` 等键不在当前 schema 内，会被静默丢弃，工具回落到组合层的默认连接（`127.0.0.1:3306`），需要在新设置页重录一条。这是有意接受的取舍：改造当时两个包都未发布（`npm view dsh-ds-db` / `dsh-dialect-mysql` 均 404），不存在持有旧文档的外部用户，为不存在的安装基础永久保留一条兼容读取路径不划算。组合层（`cordis.yml`）的平铺字段**不受影响**，仍然兼容。
 - **只有 MySQL 一个方言包**：它和第三方方言形状完全一致，只是被核心的 bundle 层与 `dependencies` 一起带上。PostgreSQL 与 Oracle 都还没有实现——加 PostgreSQL 便宜（`information_schema` 大体可移植、`?`→`$n` 是机械替换），加 Oracle 贵（无 `LIMIT`、无 `information_schema`、SID 与 service name 两种连法、`oracledb` 是重量级原生依赖）。两者都可以照 `dialects/_template` 起手，并参考 `dialects/mysql` 的完整实现
-- **不发布到 npm——安装固定走 A/B 两条路**：`dsh-dialect-mysql` 以 `workspace:^` 声明，只有 `pnpm pack` / `pnpm publish` 会把它改写成版本号（**已实测**：`npm pack` 的产物里原样保留 `workspace:^`，消费者装不上；`pnpm pack` 的产物是 `^0.1.0`）。tarball 形态的安装**已验证**（见[安装进 profile](#b-安装进-profile可安装包形态)：`--dump-config` 两行都在、profile 启动后方言与四个工具都注册成功），需要那条 `overrides`。按包名一条命令（`dsh plugin add dsh-ds-db`）**不提供**——本项目两个包的清单带 `private: true`，发布到 npm 被物理禁止；同一根因也让 **git-URL 安装**（`dsh plugin add github:…` 报 `ERR_PNPM_WORKSPACE_PKG_NOT_FOUND`，已复现）永久不可用
+- **发行形态是 tarball，git-URL 与 npm 两条路都不走——安装固定走 A/B**：框架支持 git-URL 安装（`dsh plugin add github:…`），但要求包**自包含**，而本仓是核心+方言的双包 workspace：`dsh-dialect-mysql` 以 `workspace:^` 声明，只有 `pnpm pack` / `pnpm publish` 会把它改写成版本号（**已实测**：`npm pack` 的产物里原样保留 `workspace:^`，消费者装不上；`pnpm pack` 的产物是 `^0.1.0`），git 依赖的清单不被改写，因此消费者侧报 `ERR_PNPM_WORKSPACE_PKG_NOT_FOUND`（已复现）。npm 那条路也主动关闭：两个清单带 `private: true`，`npm publish` 被物理拒绝。tarball 形态的安装**已验证**（见[安装进 profile](#b-安装进-profile可安装包形态)：`--dump-config` 两行都在、profile 启动后方言与四个工具都注册成功），需要那条 `overrides`。要让 git-URL 那条命令可用，得先把方言构建产物并入根包、patch 行改引子路径、去掉这条 workspace 依赖——代价是削弱「核心不含任何数据库类型」这条架构承诺，因此**有意不做**
 - **配置字段是「通用字段 + `extra`」**：Oracle 这类需要 service name 的库可以表达；但 SQLite 这类没有 host/port 概念的库仍会看到多余字段，届时升级为「字段完全由方言声明」（见 [`docs/05_Docs/decisions/`](docs/05_Docs/decisions/)）
 - **命名已全中立**：工具名（`db_*`）、设置命名空间（`ds-db`）、路由（`/api/ds-db/*`）、字典命名空间（`settings.db`）、默认凭据引用（`DSH_DB_PASSWORD`）都不含数据库类型字样；带 `MYSQL_*` 的标识符只出现在 `dsh-dialect-mysql` 包内——那是这个方言自己的名字
 - **定义式包（Definition）未抽出——有意偏离**：`DatabaseDialect`、只读规则、值投影与注册表定义仍住在 `dsh-ds-db` 内，所以**方言包 peer 依赖的是整个插件**（工具、设置页、客户端都在里面），而不是一份接口契约。这偏离了第一方 `dsh-shell`（定义）/ `dsh-bash-local`（实现）的 Shape。
@@ -515,6 +517,7 @@ pnpm install --frozen-lockfile                                             # 一
 - **卡片认领即接管**：`tool.call.toolview` 是 keyed slot，注册 `db_query` 就接管该工具的**所有**状态渲染，包括还在跑、失败、嵌套分发——所以视图必须有回退分支（现在的四个都有）
 - **宽单元格会被裁到 320px**：列宽固定是「一列不要吃掉整屏」的取舍，代价是超过 320px 的单元格显示省略号——单个值的完整内容靠 hover（原生 tooltip）。整张卡被截断时（有 `已截断` 标记）卡片下方另有「显示完整结果」，展开的是这次调用的**结果全文**（取自会话记录，不必重新查库）
 - **数字列看起来是文本**：mysql2 对 BIGINT / DECIMAL 的默认映射就是字符串，卡片忠实呈现——`id` 是 `"156"`、`price` 是 `"45.00"`、且左对齐。要做数字右对齐就得往卡片元数据里加「列类型」，那会撑大本来就有上限的元数据，收益不值，记在这里当已知取舍
+- **二进制单元格预览固定 256 字节，不可配置**：`src/value.ts` 的 `BINARY_PREVIEW_BYTES` 决定 BLOB/BINARY 单元格渲染成多长的十六进制预览。按插件的配置约定（「随部署而变的取值必须是配置字段」）它本可以做成 `Config` 字段，但它是**表示层界限**而非部署取值——与上面那条 320px 列宽同类，因此**有意不做成配置**。读到的是预览，完整内容要靠 `db_query` 取该列原文
 - **卡片元数据按 UTF-8 字节计量**（16 KB，含卡片自身的字段）：触顶就少带几行并标 `已截断`，行数与条目数另有 50 / 100 的上限。中文一字三字节，所以行数上限与字节上限通常由后者先触发。三条上限都随行配置走（`cardMaxBytes` / `cardMaxRows` / `cardMaxItems`），`src/card-budget.ts` 里的常量就是 schema 默认值的来源
 - **嵌套 / PTC 分发态未经真机验证**：本地工具集里没有 `run_code`，造不出嵌套调用。它由两道保证兜着——`dbCardModel` 在 `parentCallId` 有值时直接返回 `null`（嵌套调用拿不到 meta，核心只对顶层调用持久化 `presentationMeta`），这与第一方 search 卡片是同款实现。将来若拿到 PTC 环境，验收就是看嵌套的 `db_query` 是否落在通用行
 - **浏览器半边需要重新构建**：改 `src/client` 后必须 `npm run build`
