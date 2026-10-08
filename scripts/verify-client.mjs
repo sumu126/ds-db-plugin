@@ -25,7 +25,7 @@ import { load, resolve } from './css-stub.mjs'
 registerHooks({ resolve, load })
 
 const { apply, inject } = await import('../src/client/index.ts')
-const { DB_COLUMNS_PATH, DB_DATABASES_PATH, DB_SETTINGS_NAMESPACE, DB_TABLES_PATH } = await import('../src/contract.ts')
+const { DB_COLUMNS_PATH, DB_DATABASES_PATH, DB_DIALECTS_PATH, DB_SETTINGS_NAMESPACE, DB_TABLES_PATH } = await import('../src/contract.ts')
 const { en: pageEn, zh: pageZh } = await import('../src/client/locales.ts')
 const { TOOL_NS } = await import('../src/client/tool-locales.ts')
 const { TOOL_ROW_KEYS } = await import('../src/client/card-model.ts')
@@ -169,6 +169,50 @@ function makeContext(settings = { connections: [], activeId: '' }) {
 // The declaration the framework would wait on before calling `apply`.
 assert.deepEqual(inject, ['slots', 'locale', 'remote', 'remote.credentials', 'settingsScope', 'sidebarRightTabs'], 'the client declares the services it reads')
 
+// ---- The stubbed routes and browser globals ------------------------------
+
+/** The MySQL dialect's own catalog entry, as the Host describes it. */
+const MYSQL_DESCRIPTOR = {
+  name: 'mysql',
+  label: 'MySQL',
+  description: 'MySQL',
+  capabilities: ['databases', 'tables', 'columns', 'indexes', 'estimatedRows', 'charset', 'version'],
+  configFields: [],
+  // The dialect names a reference, which is exactly why seeding a new
+  // connection from it must not hand every connection the same one.
+  connectionDefaults: { host: '127.0.0.1', port: 3306, user: 'root', passwordEnv: 'DSH_MYSQL_PASSWORD' },
+  systemDatabases: ['information_schema', 'mysql', 'performance_schema', 'sys'],
+}
+
+/** The payloads this plugin's four routes answer with, by path. */
+const ANSWERS = new Map([
+  [DB_DIALECTS_PATH, { installed: [MYSQL_DESCRIPTOR], known: [] }],
+  [DB_DATABASES_PATH, { connection: 'A', databases: [{ name: 'app', charset: 'utf8mb4', collation: 'utf8mb4_bin' }] }],
+  [DB_TABLES_PATH, { connection: 'A', database: 'app', tables: [{ name: 'events', type: 'BASE TABLE', engine: 'InnoDB', estimatedRows: 12, comment: '' }] }],
+  [DB_COLUMNS_PATH, { connection: 'A', database: 'app', table: 'events', columns: [{ name: 'id', type: 'bigint', nullable: false, default: null, key: 'PRI', extra: 'auto_increment', comment: '' }] }],
+])
+
+/** Every route call this check caused, in order. */
+const calls = []
+
+// The client reads through `fetch` on the page's own origin, so these stand in
+// for the two browser globals a Node check does not have — and answer with the
+// payloads the Host routes are written to send.
+globalThis.window = { location: { origin: 'http://127.0.0.1:3099' } }
+globalThis.fetch = async (url) => {
+  // A bare path, which is how the page reads the dialect catalog, resolves
+  // against the page origin the way a browser resolves it.
+  const address = new URL(String(url), 'http://127.0.0.1:3099')
+  calls.push({ path: address.pathname, query: Object.fromEntries(address.searchParams) })
+  const body = ANSWERS.get(address.pathname)
+  return body === undefined ? new Response('not stubbed', { status: 404 }) : Response.json(body)
+}
+
+/** Let the reads a gesture started land. */
+async function settle() {
+  for (let attempt = 0; attempt < 5; attempt++) await new Promise(resolve => setTimeout(resolve, 0))
+}
+
 const harness = makeContext()
 apply(harness.ctx)
 
@@ -205,6 +249,24 @@ for (const action of ['openNew', 'openEdit', 'closeDialog', 'chooseDialect', 'ed
   assert.ok(typeof face[action] === 'function', `the inject face exposes the "${action}" action`)
 }
 assert.deepEqual([...new Set(bound)], [DB_SETTINGS_NAMESPACE], 'the page and the panel read the one settings namespace they both own')
+
+// A new connection must not seed a credential reference another one already
+// carries: the store holds one secret per reference, so a shared name means one
+// connection's password silently replaces the other's — while the page reports
+// both as configured.
+const seededReferences = []
+for (let round = 0; round < 2; round++) {
+  face.openNew()
+  await settle()
+  face.chooseDialect('mysql')
+  seededReferences.push(face.hooks.dbPage.getSnapshot().dialog.fields.passwordEnv)
+}
+assert.equal(
+  new Set(seededReferences).size,
+  seededReferences.length,
+  `two connections seeded from one dialect must not share a reference (got ${seededReferences.join(', ')})`,
+)
+console.log(`credential references: two new connections seed ${seededReferences.join(' and ')}`)
 
 // One seat per claimed tool key, keyed by the wire name the shell matches.
 const rows = allSeats().filter(seat => seat.options.name === 'tool.call.toolview')
@@ -261,31 +323,9 @@ console.log('reload: a second mount registers once each and unloads clean')
 
 // ---- The panel's read path -----------------------------------------------
 
-/** The payloads the three catalog routes answer with, by path. */
-const ANSWERS = new Map([
-  [DB_DATABASES_PATH, { connection: 'A', databases: [{ name: 'app', charset: 'utf8mb4', collation: 'utf8mb4_bin' }] }],
-  [DB_TABLES_PATH, { connection: 'A', database: 'app', tables: [{ name: 'events', type: 'BASE TABLE', engine: 'InnoDB', estimatedRows: 12, comment: '' }] }],
-  [DB_COLUMNS_PATH, { connection: 'A', database: 'app', table: 'events', columns: [{ name: 'id', type: 'bigint', nullable: false, default: null, key: 'PRI', extra: 'auto_increment', comment: '' }] }],
-])
-
-/** Every route call this check caused, in order. */
-const calls = []
-
-// The panel reads through `fetch` on the page's own origin, so these stand in
-// for the two browser globals a Node check does not have — and answer with the
-// payloads the Host routes are written to send.
-globalThis.window = { location: { origin: 'http://127.0.0.1:3099' } }
-globalThis.fetch = async (url) => {
-  const address = new URL(String(url))
-  calls.push({ path: address.pathname, query: Object.fromEntries(address.searchParams) })
-  const body = ANSWERS.get(address.pathname)
-  return body === undefined ? new Response('not stubbed', { status: 404 }) : Response.json(body)
-}
-
-/** Let the catalog reads a gesture started land. */
-async function settle() {
-  for (let attempt = 0; attempt < 5; attempt++) await new Promise(resolve => setTimeout(resolve, 0))
-}
+// The page's own gestures above logged their reads too; what this section
+// asserts is the panel's alone.
+calls.length = 0
 
 /** One saved connection, complete enough that the settings page can resolve it. */
 const CONNECTION = {

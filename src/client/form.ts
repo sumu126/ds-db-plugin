@@ -287,17 +287,40 @@ function freshId(): string {
 }
 
 /**
+ * The credential reference one new connection starts with.
+ *
+ * The store holds one secret per reference, so a reference two connections share
+ * is one password: seeding the dialect's own constant would make every
+ * connection created here overwrite the others' passwords, while the page went
+ * on reporting both as configured. The name is derived from the connection's
+ * identity instead, so a new connection never lands on a name another one
+ * carries — and it stays an identifier whatever the id holds.
+ * @param base - the reference the dialect declares, else the plugin's own default.
+ * @param id - the identity the draft is saved under.
+ * @returns the reference to seed the dialog with.
+ */
+function passwordRefFor(base: string, id: string): string {
+  return `${base}_${id.replace(/[^A-Za-z0-9]/gu, '').slice(0, 8)}`
+}
+
+/**
  * Draft text for a new connection, seeded from what its dialect declares.
  *
  * A port and an account are facts about one server, so the page takes them from
  * the dialect's own defaults; a dialect that names none leaves the box empty,
  * and an empty box stays a question for the dialect at call time rather than a
- * value the plugin guesses.
+ * value the plugin guesses. The password reference is the exception: it names a
+ * secret rather than a server fact, so it is derived per connection.
  * @param descriptor - the chosen type, as the Host described it.
  * @param dialect - the type's registry key, used when it names no label.
+ * @param id - the identity the draft is saved under.
  * @returns the draft text per shared field.
  */
-function blankFields(descriptor: DialectDescriptor | undefined, dialect: string): Record<DbFormField, string> {
+function blankFields(
+  descriptor: DialectDescriptor | undefined,
+  dialect: string,
+  id: string,
+): Record<DbFormField, string> {
   const defaults = descriptor?.connectionDefaults ?? {}
   return {
     name: descriptor?.label ?? dialect,
@@ -305,7 +328,7 @@ function blankFields(descriptor: DialectDescriptor | undefined, dialect: string)
     port: portText(defaults.port ?? UNSET_PORT),
     user: defaults.user ?? '',
     database: defaults.database ?? '',
-    passwordEnv: defaults.passwordEnv ?? DEFAULT_PASSWORD_REF,
+    passwordEnv: passwordRefFor(defaults.passwordEnv ?? DEFAULT_PASSWORD_REF, id),
     connectTimeoutMs: '10000',
     queryTimeoutMs: '30000',
     maxRows: '200',
@@ -409,9 +432,12 @@ export class DatabaseSettingsController {
         const configFields = descriptor?.configFields ?? []
         const extra: Record<string, string | number> = {}
         for (const field of configFields) extra[field.key] = field.default
+        // One identity, read twice: the reference the draft seeds is derived
+        // from the id it is saved under.
+        const id = freshId()
         this.dialog = {
-          kind: 'form', mode: 'new', id: freshId(), dialect,
-          configFields, fields: blankFields(descriptor, dialect), extra, password: '', probe: { status: 'idle' },
+          kind: 'form', mode: 'new', id, dialect,
+          configFields, fields: blankFields(descriptor, dialect, id), extra, password: '', probe: { status: 'idle' },
         }
         this.publish()
       },
