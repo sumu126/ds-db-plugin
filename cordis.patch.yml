@@ -1,13 +1,13 @@
-# The layer this bundle contributes: the plugin itself, and the dialect package
-# that gives it MySQL.
+# The layer this bundle contributes: the plugin itself — the dialect registry and
+# the read-only tools.
 #
-# The dialect is its own plugin row, exactly like a third party's would be: the
-# core provides the registry and ships no database type, so MySQL arrives here
-# the same way any other type does. Dialect packages load before the core row so
-# the tool descriptions are written from a dialect that is already registered.
+# No database type is declared here. Each dialect is a bundle of its own (MySQL
+# is `dsh-dialect-mysql`), installed after this one, and a third party's dialect
+# is installed the same way: this plugin names no default type, so every type
+# arrives through the same seam. Until one is installed the settings page offers
+# the known types as "coming soon" with the package that would provide them, and
+# a tool call answers with the refusal that names what is registered.
 - insert:
-    - id: dialect-mysql
-      name: 'dsh-dialect-mysql'
     - id: ds-db
       name: 'dsh-ds-db'
       config:

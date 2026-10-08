@@ -1,20 +1,24 @@
 /**
- * Build dialect packages into one ESM artifact each, the shape an installed
- * package is imported from.
+ * Build every dialect package by running that package's own build.
+ *
+ * Each dialect owns its build (`dialects/<name>/scripts/build.mjs`) because a
+ * dialect is also installable straight from its own git repository: `prepare`
+ * runs there, in a checkout with no parent plugin directory beside it, so the
+ * build cannot live here. This script is the in-repo convenience that runs them
+ * all in one step — it deliberately carries no esbuild configuration of its own,
+ * which is what keeps the two paths from drifting.
  *
  * Usage:
  *   node scripts/build-dialects.mjs                  build every package under dialects/
  *   node scripts/build-dialects.mjs dialects/mysql   build one, relative to the caller
  *   cd dialects/mysql && npm run build               build this package ('.' is the caller's directory)
  *
- * Harness packages and each dialect's own driver stay external: they are
- * resolved from the deployment's install, never inlined into a dialect.
  * `dialects/_template` is skipped — it is a starting point, not a package.
  */
+import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { build } from 'esbuild'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -31,9 +35,8 @@ function dialectDirs() {
 /**
  * Read one package's manifest, refusing a directory that is not one.
  *
- * Without this check a wrong directory would build the plugin's own entry into
- * a dialect's artifact and report success, which is a silent way to ship the
- * wrong file.
+ * Without this check a wrong directory would report success for a package that
+ * was never built, which is a silent way to ship nothing.
  * @param dir - the package directory, absolute.
  * @returns the parsed manifest.
  * @throws {Error} when the directory holds no dialect entry point.
@@ -46,75 +49,24 @@ function readManifest(dir) {
 }
 
 /**
- * Refuse a dialect that reaches into this repository's TypeScript source.
- *
- * Resolution runs before `external` is applied, so this also catches a specifier
- * that would otherwise be inlined: bundling the core's read-only guard into a
- * dialect would ship a second implementation of a security-relevant check.
- */
-const refuseCoreSourceImports = {
-  name: 'refuse-core-source-imports',
-  setup(build) {
-    build.onResolve({ filter: /^dsh-ds-db\/src\// }, ({ importer, path }) => {
-      throw new Error(
-        `${importer} imports "${path}" — import "dsh-ds-db/dialect-api" instead: `
-        + 'it is the built API, and a deployment that loads this dialect has no TypeScript loader',
-      )
-    })
-  },
-}
-
-/**
- * Refuse an emitted artifact that still imports a `.ts` module.
- *
- * The built dialect runs under the deployed `dsh`, which loads built JavaScript
- * with no TypeScript loader: Node refuses to strip types under `node_modules`,
- * so such an import fails at boot with the dialect row not activating. Failing
- * the build here catches the specifiers resolution left alone, such as another
- * package's TypeScript source named through an external pattern.
- * @param file - the emitted artifact to check, absolute.
- * @throws {Error} when it imports a TypeScript module.
- */
-function assertNoTypeScriptImports(file) {
-  const source = readFileSync(file, 'utf8')
-  const match = /(?:from|import\s*\()\s*["']([^"']+\.ts)["']/.exec(source)
-  if (match === null) return
-  throw new Error(
-    `${file} imports TypeScript source "${match[1]}", which cannot load under the deployed dsh; `
-    + 'import "dsh-ds-db/dialect-api" (the built dialect API) instead',
-  )
-}
-
-/**
- * Build one dialect package.
+ * Build one dialect by running the build the package itself declares.
  * @param dir - the package directory, absolute.
  * @param manifest - its parsed manifest.
+ * @throws {Error} when the package has no build of its own, or it fails.
  */
-async function buildDialect(dir, manifest) {
-  // A dialect's driver is its own dependency, so it is external here; the
-  // plugin API is provided by the deployment that loads the dialect, as the
-  // built `dsh-ds-db/dialect-api` entry rather than its TypeScript source.
-  const outfile = 'lib/index.js'
-  await build({
-    absWorkingDir: dir,
-    entryPoints: ['src/index.ts'],
-    outfile,
-    bundle: true,
-    format: 'esm',
-    platform: 'node',
-    target: 'node22',
-    external: [
-      'dsh-ds-db',
-      'dsh-ds-db/dialect-api',
-      '@deepseek-ai/*',
-      ...Object.keys(manifest.dependencies ?? {}),
-      ...Object.keys(manifest.peerDependencies ?? {}).filter(name => name !== 'dsh-ds-db'),
-    ],
-    plugins: [refuseCoreSourceImports],
-    sourcemap: true,
-    logLevel: 'info',
-  })
-  assertNoTypeScriptImports(join(dir, outfile))
+function buildDialect(dir, manifest) {
+  const script = join(dir, 'scripts/build.mjs')
+  if (!existsSync(script)) {
+    throw new Error(
+      `${manifest.name} has no scripts/build.mjs of its own. Every dialect owns its build so it can be `
+      + 'installed straight from its own repository; copy the one in dialects/_template.',
+    )
+  }
+  console.log(`building dialect: ${manifest.name}`)
+  const run = spawnSync(process.execPath, [script], { cwd: dir, stdio: 'inherit' })
+  if (run.status !== 0) {
+    throw new Error(`${manifest.name} build failed with exit code ${String(run.status ?? 'signal')}`)
+  }
 }
 
 // A relative argument resolves against the caller, so the two documented ways to
@@ -128,7 +80,5 @@ if (requested.length === 0) {
   console.log('no dialect packages to build')
 }
 for (const dir of requested) {
-  const manifest = readManifest(dir)
-  console.log(`building dialect: ${manifest.name}`)
-  await buildDialect(dir, manifest)
+  buildDialect(dir, readManifest(dir))
 }

@@ -7,10 +7,6 @@ settings:
 importers:
 
   .:
-    dependencies:
-      dsh-dialect-mysql:
-        specifier: workspace:^
-        version: link:dialects/mysql
     devDependencies:
       '@types/node':
         specifier: ^22.20.0
@@ -21,6 +17,9 @@ importers:
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
+      dsh-ds-db:
+        specifier: file:.
+        version: file:(@deepseek-ai/cordis@4.0.4)
       esbuild:
         specifier: ^0.25.0
         version: 0.25.0
@@ -52,9 +51,9 @@ importers:
       '@types/node':
         specifier: ^22.20.0
         version: 22.20.4
-      dsh-ds-db:
-        specifier: workspace:^
-        version: link:../..
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.0
       tsx:
         specifier: ^4.22.4
         version: 4.23.15
@@ -412,6 +411,38 @@ packages:
     resolution: {integrity: sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==}
     engines: {node: '>=8'}
 
+  'dsh-ds-db@file:':
+    resolution: {directory: '', type: directory}
+    peerDependencies:
+      '@deepseek-ai/cordis': '*'
+      '@deepseek-ai/dsh-api-remotes': '*'
+      '@deepseek-ai/dsh-client-store': '*'
+      '@deepseek-ai/dsh-client-ui-primitives': '*'
+      '@deepseek-ai/dsh-client-ui-slots': '*'
+      '@deepseek-ai/dsh-credentials': '*'
+      '@deepseek-ai/dsh-settings': '*'
+      '@deepseek-ai/dsh-tools': '*'
+      '@deepseek-ai/schemastery': '*'
+    peerDependenciesMeta:
+      '@deepseek-ai/cordis':
+        optional: true
+      '@deepseek-ai/dsh-api-remotes':
+        optional: true
+      '@deepseek-ai/dsh-client-store':
+        optional: true
+      '@deepseek-ai/dsh-client-ui-primitives':
+        optional: true
+      '@deepseek-ai/dsh-client-ui-slots':
+        optional: true
+      '@deepseek-ai/dsh-credentials':
+        optional: true
+      '@deepseek-ai/dsh-settings':
+        optional: true
+      '@deepseek-ai/dsh-tools':
+        optional: true
+      '@deepseek-ai/schemastery':
+        optional: true
+
   esbuild@0.25.0:
     resolution: {integrity: sha512-BXq5mqc8ltbaN34cDqWuYKyNhX8D/Z0J1xdtdQ8UcIIIyJyz+ZMKUt58tF3SrZ85jcfN/PZYhjR5uDQAYNVbuw==}
     engines: {node: '>=18'}
@@ -749,6 +780,10 @@ snapshots:
   csstype@3.2.3: {}
 
   detect-libc@2.1.2: {}
+
+  dsh-ds-db@file:(@deepseek-ai/cordis@4.0.4):
+    optionalDependencies:
+      '@deepseek-ai/cordis': 4.0.4
 
   esbuild@0.25.0:
     optionalDependencies:
