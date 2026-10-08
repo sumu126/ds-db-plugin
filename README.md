@@ -1,6 +1,6 @@
 # dsh-ds-db
 
-给 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）用的 **只读数据库插件**：自带 Web 设置页，给模型暴露只读工具，而**它面向哪种数据库由可插拔的方言（dialect）决定**。内置 MySQL；要支持别的数据库，发一个方言包即可，不必改本仓库。
+给 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）用的 **只读数据库插件**：自带 Web 设置页，给模型暴露只读工具，而**它面向哪种数据库由可插拔的方言（dialect）决定**。官方提供 MySQL 方言（与核心分开安装）；要支持别的数据库，发一个方言包即可，不必改本仓库。
 
 插件是独立目录、独立的工程，不修改 `deepseek-harness` 仓库的任何文件。
 
@@ -39,13 +39,13 @@
 
 ## 组成
 
-核心**不含任何数据库类型**：MySQL 也是一个方言包，和第三方的形状完全一样。
+核心**不含任何数据库类型**，也不依赖任何一个——它的 `dependencies` 是空的。MySQL 同样是一个方言包，和第三方的形状完全一样：核心与方言是**两个独立安装的 bundle**，装完核心再按需装方言。
 
 ```
 .
-├── package.json            # 根包 = 核心（dsh-ds-db）：dsh.bundle + dsh.client
+├── package.json            # 根包 = 核心（dsh-ds-db）：dsh.bundle + dsh.client，dependencies 为空
 ├── pnpm-workspace.yaml     # packages: ['.', 'dialects/*']
-├── cordis.patch.yml        # 以 bundle 安装时贡献两行：方言包 + 核心
+├── cordis.patch.yml        # 以 bundle 安装时贡献一行：核心自己（方言行在方言包自己的 patch 里）
 ├── src/                    # 核心（host 半边 + browser 半边），不含方言
 │   ├── index.ts            # host 入口：设置命名空间、方言注册表、工具、两条 API 路由
 │   ├── contract.ts         # 两半边共享的常量与类型（不含任何 import）
@@ -60,12 +60,14 @@
 │   ├── tools.ts            # 模型可见工具（方言中立，不含 SQL）
 │   ├── card-budget.ts      # 卡片元数据的字节/行/项上限，也是配置 schema 默认值的来源
 │   └── client/             # 浏览器半边：设置整页、表单状态机、双语字典、CSS Modules
-├── dialects/               # ★ 数据库类型工作区
-│   ├── mysql/              #   dsh-dialect-mysql：官方方言，随主包自动安装
+├── dialects/               # ★ 数据库类型工作区（每个方言都是独立 bundle）
+│   ├── mysql/              #   dsh-dialect-mysql：官方方言，自带 dsh.bundle.patch，单独安装
 │   │   ├── src/index.ts    #     完整真实实现，写新方言时的参考
+│   │   ├── cordis.patch.yml #    它自己那一层：只插 dialect-mysql 一行
 │   │   ├── tests/          #     该方言的行为测试
+│   │   ├── scripts/build.mjs #   自包含构建（prepare 在仓外副本里也要能跑）
 │   │   └── scripts/verify.ts #   契约自检
-│   ├── _template/          #   新方言的起手骨架（不是包）
+│   ├── _template/          #   新方言的起手骨架（不是包；含它自己的 patch 与 build）
 │   └── README.md           #   工作区说明：怎么加一个方言
 ├── docs/                   # 需求、设计、API 契约、决策记录
 ├── scripts/                # 构建、验证与探针脚本
@@ -86,15 +88,13 @@
 
 ```sh
 cd ds-db-plugin
-pnpm install --no-frozen-lockfile      # 必须 pnpm：方言依赖用 workspace: 声明，npm 不认
+pnpm install --no-frozen-lockfile      # 必须 pnpm：本仓是 pnpm workspace（dialects/* 是成员包）
 npm run build                          # 产出 lib/index.js（host）、lib/client.js（浏览器半边）与 lib/types/**（类型声明；旁边没有已构建的 harness 时这一步自动跳过，见「给插件开发者」）
 ```
 
-> **必须用 pnpm。** `dsh-dialect-mysql` 以 `workspace:^` 声明——本地是同仓链接，`pnpm pack` / `pnpm publish` 时才会被改写成版本号；npm 会直接以 `EUNSUPPORTEDPROTOCOL "workspace:"` 拒绝。注意改写**只发生在 pack/publish**：从 git URL 安装（`dsh plugin add github:sumu126/ds-db-plugin`、`pnpm add git+https://…`）拿到的是原样清单，会以 `ERR_PNPM_WORKSPACE_PKG_NOT_FOUND` 失败（**已复现**）——方言包在消费者侧的工作区里不可见。
+> **必须用 pnpm。** 本仓是 pnpm workspace：`pnpm-workspace.yaml` 把 `dialects/*` 声明为成员包，而 `autoInstallPeers: false` 这类开关也只有 pnpm 读。本插件声明的 `@deepseek-ai/*` 全是**宿主运行时提供**的 optional peer，它们没有发布到 npm，包管理器去自动安装只会失败——这条配置就是把这个默认行为关掉。
 >
-> **本项目的发行形态是 tarball，不是 git-URL。** 框架本身支持 `dsh plugin add github:<owner>/<repo>`（要求作者的 `prepare` 自包含——那半边本仓已满足，见下），但那条路要求**每个包自包含**；本仓是「核心 + 方言包」的 workspace 双包结构，核心对仓内方言的 `workspace:` 依赖在消费者的工作区里没有对应包，因此 git-URL 形态不满足。本项目也**不发布到 npm**（两个清单都带 `private: true`，`npm publish` 被物理拒绝）。所以从本仓装载走 **A**（clone + `--patch`）或 **B**（`pnpm pack` 出两个 tgz 装进 profile）；两条都是官方文档认可的形态，B 正是「交付 tarball」那条免授权路径。
->
-> 仓库根还有一条相关配置：`pnpm-workspace.yaml` 里的 `autoInstallPeers: false`。本插件声明的 `@deepseek-ai/*` 全是**宿主运行时提供**的 optional peer，它们没有发布到 npm，包管理器去装只会失败——这条配置就是把这个默认行为关掉。
+> **本项目不发布到 npm**：核心与方言两个清单都带 `private: true`，`npm publish` 被物理拒绝。发行形态是 **tarball**（`pnpm pack`，见「加载插件」B）或源码 checkout（A）。
 
 `lib/client.js` 是必需产物：`dsh` 的客户端模块扫描读取包的 `exports["./client"]`，改了 `src/client` 必须重新构建。
 
@@ -121,23 +121,25 @@ ds-db (file:///…/ds-db-plugin/lib/index.js): failed to import
 
 用装了 `dsh` 的机器做开发时，走 B（装进 profile），不要指望 `dsh web --patch <checkout 里的插件>`。
 
-**B. 安装进 profile（可安装包形态）**
+**B. 安装进 profile（可安装包形态：两次 add）**
 
-`dsh-ds-db` 的 `dependencies` 里有 `dsh-dialect-mysql`，而本项目**不发布到 npm**（两个包的清单都带 `private: true`，发布会被物理拒绝），pnpm 去 registry 满足这条范围会以 `ERR_PNPM_FETCH_404` 失败——这是既定安装路径的一部分，不是包本身的问题。做法是本地 override：第一次 add 会先把 profile 目录建出来（然后以 404 失败）；把两个 tarball 放进该目录，并在它的 `pnpm-workspace.yaml` 里把这条依赖指向本地文件，再 add 一次。方言行仍由主包的 bundle 层插入，方言包由 override 提供：
-
-  ```yaml
-  overrides:
-    dsh-dialect-mysql: file:./dsh-dialect-mysql-0.1.0.tgz
-  ```
+核心与方言是**两个独立的 bundle**，各装一次——核心不需要任何 override，也不会先失败一次：
 
   ```sh
-  pnpm pack --pack-destination .                                   # 根包
-  (cd dialects/mysql && pnpm pack --pack-destination ../..)        # 方言包
-  cp dsh-*.tgz "$DSH_HOME/profiles/demo/"
-  dsh plugin --profile demo add "$DSH_HOME/profiles/demo/dsh-ds-db-0.1.0.tgz"
-  dsh --profile demo --dump-config        # 应能看到 "# == dsh-ds-db" 这一层，两行（dialect-mysql、ds-db）都在
-  dsh --profile demo
+  pnpm pack --pack-destination .                                   # 核心（根包）
+  pnpm pack ./dialects/mysql --pack-destination .                  # 方言包；给目录参数，`--prefix` 不换目录会打出根包
+  tar -tzf dsh-dialect-mysql-0.1.0.tgz | head -3                   # 先确认打的是方言包，再拿它去 add
+  dsh plugin --profile web add ./dsh-ds-db-0.1.0.tgz               # ① 核心
+  dsh plugin --profile web add ./dsh-dialect-mysql-0.1.0.tgz       # ② 方言
+  dsh --profile web --dump-config      # 应看到两个独立层：# == dsh-ds-db 与 # == dsh-dialect-mysql
+  dsh --profile web
   ```
+
+  **profile 要选带 Web 的那一个**（如 `web`）。`demo` 只有 base 层：工具装得上，但设置页起不来。
+
+  **只装核心是可用状态**：工具照常注册，只是没有可用类型——设置页把已知类型显示为「即将支持」+包名，工具调用返回指明「当前注册了什么」的拒绝。
+
+  **只装方言没有意义**：方言运行时 import 核心的 `dsh-ds-db/dialect-api`，核心不在时该行以 `failed to import` 不激活（启动会明确告警，不影响其它行）——事后补装核心即恢复。
 
 ### 设置页
 
@@ -314,8 +316,9 @@ cp -r dialects/_template <你的方言目录>
 # A. 留在本仓 dialects/ 下开发（官方/合作方言）
 mv <你的方言目录> dialects/clickhouse && cd dialects/clickhouse && npm run verify
 
-# B. 或复制出去建独立仓发布
-cd <你的方言目录> && git init && npm run verify && npm publish
+# B. 或复制出去建独立仓分发
+cd <你的方言目录> && git init && npm run verify
+# 分发两条路都行：交付 tarball（装的人 dsh plugin add <你打的 tgz>），或发布到 registry 供他人按包名安装
 ```
 
 骨架里每个 `TODO` 都标了要改的位置；动手前建议先读 [`dialects/mysql/src/index.ts`](dialects/mysql/src/index.ts)——那是**完整真实的参考实现**，包括驱动接入、`information_schema` 元数据 SQL、只读规则与投影。
@@ -324,14 +327,14 @@ cd <你的方言目录> && git init && npm run verify && npm publish
 
 ### 在仓内加方言要不要改核心？
 
-只有**随主包分发**时才需要，改两处：核心 `cordis.patch.yml` 加一行（**排在 `ds-db` 行之前**）、核心 `dependencies` 加该方言包。独立发布的方言，核心一行都不用动——用户自己 `dsh plugin add`。
+**不用。** 方言行住在方言包自己的 patch 里，核心不引用任何方言（它的 `dependencies` 是空的）——仓内方言与仓外方言在这一层完全同形，区别只是你的目录在 `dialects/` 下、由本仓一起打包。放下一个目录、`pnpm install` 让它成为 workspace 成员、并在它的清单里把 `dsh.bundle.patch` 指向自己的 patch，就完事了。
 
 ### 常见坑
 
 | 现象 | 原因 |
 | --- | --- |
-| `npm install` 报 `EUNSUPPORTEDPROTOCOL "workspace:"` | 依赖用 `workspace:` 声明，只能用 pnpm 装（发布产物里已被改写成版本号） |
-| git-URL 安装报 `ERR_PNPM_WORKSPACE_PKG_NOT_FOUND: dsh-dialect-mysql` | 框架支持 git-URL 安装，但要求包**自包含**；本仓是核心+方言的双包 workspace，pnpm 对 git 依赖**不改写** `workspace:`（只有 pack/publish 改写），消费者工作区里没有这个包。本仓发行形态是 tarball——走 A（`--patch`）或 B（tgz + overrides） |
+| `npm install` 装出一堆 `@deepseek-ai/*`，或 workspace 相关报错 | 本仓是 pnpm workspace（`dialects/*` 是成员包），`autoInstallPeers: false` 这类开关只有 pnpm 读 |
+| 装了方言，启动却报 `dialect-mysql (dsh-dialect-mysql): failed to import` | 方言运行时 import 核心的 `dsh-ds-db/dialect-api`，而核心没装或没激活。先装核心 |
 | `pnpm install` 一直重试解析 `@deepseek-ai/dsh-*` | 那些是宿主提供的 optional peer，仓库已用 `autoInstallPeers: false` 关掉自动安装；仍出现说明你不在本仓库根目录 |
 | 调用报「dialect X is not registered」 | 你的包没被加载；用 `dsh --dump-config` 确认那一层在 |
 | 工具描述里还是旧的自称 | 已知行为：描述注册时写定，重载后更新；**调用不受影响** |
@@ -445,15 +448,14 @@ pnpm dsh web --patch <插件目录>/.dev/cordis.yml
 pnpm install --frozen-lockfile        # lockfile 必须与 package.json 一致
 pnpm run typecheck && pnpm test
 pnpm run verify:host && pnpm run verify:settings && pnpm run verify:loader && pnpm run verify:cards
-pnpm pack --pack-destination .        # 根包必须 pnpm：只有它会改写 workspace:
-npm pack ./dialects/mysql --pack-destination .   # 方言包给目录参数；`--prefix` 不换目录，会打出根包
+pnpm pack --pack-destination .                   # 核心
+pnpm pack ./dialects/mysql --pack-destination .  # 方言包给目录参数；`--prefix` 不换目录，会打出根包
 # 落点显式给出，下一行的相对路径才是确定的（两行都支持 --pack-destination）
 tar -tzf dsh-dialect-mysql-0.1.0.tgz | head -3   # 先确认打的是方言包，别拿根包去 add
-# 未发布时：第一次 add 建出 profile 后以 ERR_PNPM_FETCH_404 失败，
-# 把 tarball 放进 profile 目录并按「安装进 profile」一节加 overrides，再 add 一次
-dsh plugin --profile demo add ./dsh-ds-db-0.1.0.tgz
-dsh --profile demo --dump-config | grep -E 'dialect-mysql|ds-db'   # 两行都在，且方言行在前
-dsh --profile demo web                # 起得来、无 FAILED fiber、模型侧能看到 db_connections
+dsh plugin --profile web add ./dsh-ds-db-0.1.0.tgz          # ① 核心
+dsh plugin --profile web add ./dsh-dialect-mysql-0.1.0.tgz  # ② 方言
+dsh --profile web --dump-config | grep -E 'dsh-ds-db|dsh-dialect-mysql'   # 两个独立层都在
+dsh --profile web                     # 起得来、无 FAILED fiber、模型侧能看到 db_connections
 # 顺手在装出来的那一版上跑 db:live / card:live —— 别人替代不了这条验据
 git tag v0.1.0                        # 只有上面全绿才打
 ```
@@ -488,14 +490,14 @@ pnpm install --frozen-lockfile                                             # 一
 
   文档漂移只让人看到旧清单，**源码与产物时间倒挂会把旧行为直接发出去**。
 
-第一条不是形式主义：这个仓库的 `pnpm-lock.yaml` **曾经在主分支上腐烂了十几个提交**——它的根 importer 还停在"依赖只有 mysql2"的形态，`dialects/mysql` 这个 workspace 成员从未出现在里面。原因是本仓的 pnpm 路径长期没被走通（一直在用 `npm install --legacy-peer-deps` 绕），于是同时掩盖了两件事：pnpm 会自动安装缺失的 peer（而本插件的 peer 全是宿主提供、未发布的包），以及 lockfile 早已过期。两笔账在依赖改用只有 pnpm 认的 `workspace:` 那一刻同时到期。所以：**lockfile 要么被 gate，要么删掉——一个说谎的 lockfile 比没有更糟**。这里选 gate，就是这第一条。
+第一条不是形式主义：这个仓库的 `pnpm-lock.yaml` **曾经在主分支上腐烂了十几个提交**——它的根 importer 还停在"依赖只有 mysql2"的形态，`dialects/mysql` 这个 workspace 成员从未出现在里面。原因是本仓的 pnpm 路径长期没被走通（一直在用 `npm install --legacy-peer-deps` 绕），于是同时掩盖了两件事：pnpm 会自动安装缺失的 peer（而本插件的 peer 全是宿主提供、未发布的包），以及 lockfile 早已过期。两笔账在依赖改用只有 pnpm 才能正确处理的形态那一刻同时到期。所以：**lockfile 要么被 gate，要么删掉——一个说谎的 lockfile 比没有更糟**。这里选 gate，就是这第一条。
 
 改动落在哪一层：
 
 | 想做什么 | 改哪 |
 | --- | --- |
 | 加数据库类型（第三方） | **不要改本仓库**，复制模板出去发包 |
-| 加数据库类型（官方/随主包分发） | `dialects/<name>/` + 核心 `cordis.patch.yml`、`dependencies` 各一行 |
+| 加数据库类型（随本仓一起分发） | `dialects/<name>/`（自带 `dsh.bundle.patch`）；核心一行都不用动 |
 | 加工具 | `src/tools.ts`；若需要方言提供底层查询，先在 `DialectCapability` 加能力键，再在方言里实现 |
 | 改设置页 | `src/client/`（改完必须 `npm run build`） |
 | 改方言 seam 本身 | `src/dialect.ts`（`DatabaseDialect`、注册表、`DialectFacts`） |
@@ -504,12 +506,12 @@ pnpm install --frozen-lockfile                                             # 一
 ## 已知限制 / 暂未实现
 
 - **破坏性变更：多连接改造之前的用户文档不再被读取**。设置页保存的连接从「平铺字段」改成了 `connections[]`，旧文档里的 `ds-db.host` / `port` / `user` 等键不在当前 schema 内，会被静默丢弃，工具回落到组合层的默认连接（`127.0.0.1:3306`），需要在新设置页重录一条。这是有意接受的取舍：改造当时两个包都未发布（`npm view dsh-ds-db` / `dsh-dialect-mysql` 均 404），不存在持有旧文档的外部用户，为不存在的安装基础永久保留一条兼容读取路径不划算。组合层（`cordis.yml`）的平铺字段**不受影响**，仍然兼容。
-- **只有 MySQL 一个方言包**：它和第三方方言形状完全一致，只是被核心的 bundle 层与 `dependencies` 一起带上。PostgreSQL 与 Oracle 都还没有实现——加 PostgreSQL 便宜（`information_schema` 大体可移植、`?`→`$n` 是机械替换），加 Oracle 贵（无 `LIMIT`、无 `information_schema`、SID 与 service name 两种连法、`oracledb` 是重量级原生依赖）。两者都可以照 `dialects/_template` 起手，并参考 `dialects/mysql` 的完整实现
-- **发行形态是 tarball，git-URL 与 npm 两条路都不走——安装固定走 A/B**：框架支持 git-URL 安装（`dsh plugin add github:…`），但要求包**自包含**，而本仓是核心+方言的双包 workspace：`dsh-dialect-mysql` 以 `workspace:^` 声明，只有 `pnpm pack` / `pnpm publish` 会把它改写成版本号（**已实测**：`npm pack` 的产物里原样保留 `workspace:^`，消费者装不上；`pnpm pack` 的产物是 `^0.1.0`），git 依赖的清单不被改写，因此消费者侧报 `ERR_PNPM_WORKSPACE_PKG_NOT_FOUND`（已复现）。npm 那条路也主动关闭：两个清单带 `private: true`，`npm publish` 被物理拒绝。tarball 形态的安装**已验证**（见[安装进 profile](#b-安装进-profile可安装包形态)：`--dump-config` 两行都在、profile 启动后方言与四个工具都注册成功），需要那条 `overrides`。要让 git-URL 那条命令可用，得先把方言构建产物并入根包、patch 行改引子路径、去掉这条 workspace 依赖——代价是削弱「核心不含任何数据库类型」这条架构承诺，因此**有意不做**
+- **只有 MySQL 一个方言包**：它和第三方方言形状完全一致——自带 `dsh.bundle.patch`，作为独立 bundle 单独安装，核心不引用它。PostgreSQL 与 Oracle 都还没有实现——加 PostgreSQL 便宜（`information_schema` 大体可移植、`?`→`$n` 是机械替换），加 Oracle 贵（无 `LIMIT`、无 `information_schema`、SID 与 service name 两种连法、`oracledb` 是重量级原生依赖）。两者都可以照 `dialects/_template` 起手，并参考 `dialects/mysql` 的完整实现
+- **发行形态是 tarball，不发布到 npm——安装固定走 A/B**：两个清单都带 `private: true`，`npm publish` 被物理拒绝。核心与方言是**两个独立 bundle**，各装一次（见「加载插件」B 节）；核心零依赖，因此不需要任何 override，也不会先以 404 失败一次。tarball 形态**已实测**：核心单独装 exit 0；补装方言后 `--dump-config` 出现 `# == dsh-ds-db` 与 `# == dsh-dialect-mysql` 两个独立层，启动后 `install-probe` 报 `dialects=["mysql"]` 与四个工具；只装核心时 `dialects=[]` 而四个工具仍注册。**git-URL 安装（`dsh plugin add github:…`）在这一形态下未验证**：核心已自包含（零 `dependencies`，`prepare` 也不再依赖旁边的 harness checkout），原先那道障碍不再存在，但本仓没有对这条路径做过端到端复验，所以不写进安装说明
 - **配置字段是「通用字段 + `extra`」**：Oracle 这类需要 service name 的库可以表达；但 SQLite 这类没有 host/port 概念的库仍会看到多余字段，届时升级为「字段完全由方言声明」（见 [`docs/05_Docs/decisions/`](docs/05_Docs/decisions/)）
 - **命名已全中立**：工具名（`db_*`）、设置命名空间（`ds-db`）、路由（`/api/ds-db/*`）、字典命名空间（`settings.db`）、默认凭据引用（`DSH_DB_PASSWORD`）都不含数据库类型字样；带 `MYSQL_*` 的标识符只出现在 `dsh-dialect-mysql` 包内——那是这个方言自己的名字
 - **定义式包（Definition）未抽出——有意偏离**：`DatabaseDialect`、只读规则、值投影与注册表定义仍住在 `dsh-ds-db` 内，所以**方言包 peer 依赖的是整个插件**（工具、设置页、客户端都在里面），而不是一份接口契约。这偏离了第一方 `dsh-shell`（定义）/ `dsh-bash-local`（实现）的 Shape。
-  取舍理由：目前唯一随包发布的方言是 `dsh-dialect-mysql`，与插件同仓、同版本、同一次提交；拆出第二个发布物会引入独立版本线与构建顺序，而收益（方言包依赖面收窄）在只有一个方言时不成立。
+  取舍理由：目前唯一的官方方言是 `dsh-dialect-mysql`——与本插件同仓、同版本、同一次提交（作为独立 bundle 打包，但不独立发版）；拆出第二个发布物会引入独立版本线与构建顺序，而收益（方言包依赖面收窄）在只有一个方言时不成立。
   **触发条件**：出现任何需要**独立发布**的仓外方言时，把 `dialect` / `sql-guard` / `value` / `dialect-audit` 抽成 `dsh-db-dialect-api`，两个消费者改为只依赖它。其中**「方言不再够到 TypeScript 源码」这一半已完成**：`dsh-ds-db/dialect-api` 是构建产物，方言只依赖它（`grep -rn "dsh-ds-db/src" dialects/` 已为空）。剩下的是包级依赖面——方言仍 peer 整个插件包。验收标准：`dialects/*/package.json` 不再出现 `dsh-ds-db`。
 - **远程调用面走低层通道——有意偏离**：设置页用 `connection.fetch.register` 的自定义路由 + 裸 `fetch`，而不是 Typert `@Remote`（第一方 `file-upload`、`session-log-export` 是同款用法）。原因是**仓外插件无法运行仓内的 typert 生成管线**（需要 `./typert`、`./remote` 产物与 generator 参与构建）。代价是失去生成类型与统一失败词汇，`contract.ts` 里的 wire 形状是手写的——客户端因此必须自己补齐字段（`completeDescriptor`）。**触发条件**：插件进入第一方仓库，或 typert 提供面向仓外插件的生成入口。
 - **MySQL 上的取消是「退役会话」而非「中断语句」**：mysql2 的 Promise pool 没有 `destroy()`、只有 `end()`，所以中止一次调用会让池关闭、而 `COM_QUIT` 排在正在执行的语句之后——**服务端那条语句会跑完**；随后该会话被淘汰、下一次调用重建连接。要真正中断需要方言自己持有单条连接（`pool.getConnection()` → `conn.query()` → abort 时 `conn.destroy()`）

@@ -12,15 +12,15 @@ cp -r dialects/_template dialects/clickhouse
 npm test && npm run verify          # 在 dialects/clickhouse 下跑契约自检
 ```
 
-要让它随主包分发，在**核心**的 `cordis.patch.yml` 多加一行，并把 `dependencies` 里的方言包指向它：
+**核心一行都不用动。** 方言行住在**你自己的** `cordis.patch.yml` 里（骨架里就有，把两处 `<name>` 改掉即可）：核心的 `dependencies` 是空的，每个方言都自带这样一份 patch——这正是仓内方言与第三方方言同形的原因。
 
 ```yaml
 - insert:
     - id: dialect-clickhouse
       name: 'dsh-dialect-clickhouse'
-    - id: ds-db
-      name: 'dsh-ds-db'
 ```
+
+改完核对 `package.json` 的 `dsh.bundle.patch` 指向本文件——那是「这个包能被 `dsh plugin add` 装」的凭据。
 
 ### B. 出仓成独立包（第三方）
 
@@ -28,12 +28,15 @@ npm test && npm run verify          # 在 dialects/clickhouse 下跑契约自检
 cp -r <插件>/dialects/_template ~/dsh-dialect-clickhouse
 cd ~/dsh-dialect-clickhouse
 git init
-# package.json 里把 devDependencies 的 "dsh-ds-db": "file:../.." 改成版本范围，并加 peerDependencies
-npm install --legacy-peer-deps && npm run verify
-npm publish
+# devDependencies 的 "dsh-ds-db": "file:../.." 指向前面的插件检出，出仓后要改成你自己那份路径。
+# 本插件不发布到 registry，所以这条解析不到版本范围——验证与构建期给一份本地检出即可，
+# 运行时的 dsh-ds-db 由宿主的部署提供（它是 optional peer）。
+npm install && npm run verify && npm run build
 ```
 
-用户：`dsh plugin --profile web add dsh-dialect-clickhouse`
+分发两条路，都不必先进 registry：把 tgz 交给用户 `dsh plugin add <tgz>`，或你自己发布到 registry 后让他 `dsh plugin add dsh-dialect-clickhouse`。
+
+装法：**先装核心 `dsh-ds-db`，再装方言包**——方言依赖核心，核心不依赖方言。只装方言会在启动时报 `failed to import`（方言要读核心的 `dsh-ds-db/dialect-api`）。
 
 ## 要改的地方
 
