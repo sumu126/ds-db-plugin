@@ -352,6 +352,20 @@
   color: var(--dsw-alias-state-error-primary);
 }
 
+/* The reference field carries a control of its own, so the input and the button
+   share a row; the input takes the row minus the button and is allowed to
+   shrink, since a reference is longer than the box. */
+.inputRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.inputRow .input {
+  flex: 1;
+  min-width: 0;
+}
+
 .failed {
   margin: 12px 0 0;
   font-size: 12px;

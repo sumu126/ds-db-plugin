@@ -10,7 +10,7 @@
 
 import { useEffect, useRef } from 'react'
 import clsx from 'clsx'
-import { Button, IconPlusOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, IconPlusOutline16, IconRefreshOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ConnectionCard, DbDialog, DbFormField, DbPageFace, DbProbe } from './form.ts'
 import { FIELD_INVALID_KEY, dialogValid, editDraftFor, endpointText, fieldInvalid, sharedPasswordRef } from './form.ts'
@@ -129,27 +129,49 @@ function DialogField(props: {
   t: (key: DbLocaleKey, params?: Record<string, string>) => string
   disabled: boolean
   onEdit: (field: DbFormField, text: string) => void
+  /** Move the draft onto a freshly minted credential reference. */
+  onNewRef: () => void
   /** Name of the connection already carrying this draft's reference, if any. */
   shared: string | undefined
 }) {
   const { field, t } = props
   const text = props.dialog.fields[field]
   const invalid = fieldInvalid(field, text)
+  const input = (
+    <input
+      id={`dsh-db-${field}`}
+      className={styles.input}
+      type="text"
+      {...NUMERIC_FIELDS.has(field) ? { inputMode: 'numeric' as const } : {}}
+      {...invalid ? { 'aria-invalid': true } : {}}
+      value={text}
+      disabled={props.disabled}
+      onChange={(event) => { props.onEdit(field, event.target.value) }}
+    />
+  )
   return (
     <div className={styles.field}>
       <div className={styles.head}>
         <label className={styles.label} htmlFor={`dsh-db-${field}`}>{t(FIELD_LABEL_KEY[field])}</label>
       </div>
-      <input
-        id={`dsh-db-${field}`}
-        className={styles.input}
-        type="text"
-        {...NUMERIC_FIELDS.has(field) ? { inputMode: 'numeric' as const } : {}}
-        {...invalid ? { 'aria-invalid': true } : {}}
-        value={text}
-        disabled={props.disabled}
-        onChange={(event) => { props.onEdit(field, event.target.value) }}
-      />
+      {/* The reference names a secret, so one shared with another connection is
+          worth replacing: the control mints a name nothing else is on. */}
+      {field === 'passwordEnv'
+        ? (
+          <div className={styles.inputRow}>
+            {input}
+            <Button
+              size="sm"
+              variant="outline"
+              icon={<IconRefreshOutline16 />}
+              aria-label={t('passwordEnvNew')}
+              title={t('passwordEnvNew')}
+              disabled={props.disabled}
+              onClick={props.onNewRef}
+            />
+          </div>
+        )
+        : input}
       <p className={invalid ? styles.invalid : styles.hint}>{invalid ? t(FIELD_INVALID_KEY[field]) : t(FIELD_HINT_KEY[field])}</p>
       {/* The reference names a secret, so sharing one is not a second password:
           it is the same one, replaced for both connections on the next save. */}
@@ -220,6 +242,7 @@ function FormDialog(props: {
   /** Name of the connection already carrying this draft's reference, if any. */
   sharedReference: string | undefined
   onEditField: (field: DbFormField, text: string) => void
+  onNewRef: () => void
   onEditExtra: (key: string, text: string) => void
   onEditPassword: (text: string) => void
   onTest: () => void
@@ -240,6 +263,7 @@ function FormDialog(props: {
           disabled={props.saving}
           shared={props.sharedReference}
           onEdit={props.onEditField}
+          onNewRef={props.onNewRef}
         />
       ))}
       {dialog.configFields.map(field => (
@@ -291,6 +315,7 @@ function FormDialog(props: {
           disabled={props.saving}
           shared={props.sharedReference}
           onEdit={props.onEditField}
+          onNewRef={props.onNewRef}
         />
       ))}
       {dialog.probe.status === 'running'
@@ -389,6 +414,7 @@ export function DatabaseSettingsPage(props: DatabaseSettingsPageProps) {
                           t={t}
                           sharedReference={sharedPasswordRef(state.cards.map(card => card.profile), dialog)?.name}
                           onEditField={props.editField}
+                          onNewRef={props.newPasswordRef}
                           onEditExtra={props.editExtra}
                           onEditPassword={props.editPassword}
                           onTest={props.testDraft}

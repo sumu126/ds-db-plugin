@@ -122,6 +122,8 @@ export interface DbFormActions {
   closeDialog: () => void
   chooseDialect: (dialect: string) => void
   editField: (field: DbFormField, text: string) => void
+  /** Move the draft onto a freshly minted credential reference. */
+  newPasswordRef: () => void
   /** Stage one dialect field's value. */
   editExtra: (key: string, text: string) => void
   editPassword: (text: string) => void
@@ -287,22 +289,21 @@ function freshId(): string {
 }
 
 /**
- * The credential reference one new connection starts with.
+ * A fresh credential reference: the base name plus a random identity.
  *
  * The store holds one secret per reference, so a reference two connections share
- * is one password: seeding the dialect's own constant would make every
+ * is one password — seeding the dialect's own constant would make every
  * connection created here overwrite the others' passwords, while the page went
- * on reporting both as configured. The name carries the connection's whole
- * identity instead — an identifier whatever the identity holds, and never a name
- * another connection is already on.
+ * on reporting both as configured. Every name this mints is one no other
+ * connection is on, and the dialog's refresh control mints another for a
+ * connection the user wants off a name it is sharing.
  * @param base - the reference the dialect declares, else the plugin's own default.
- * @param id - the identity the draft is saved under.
- * @returns the reference to seed the dialog with.
+ * @returns a reference carrying a random identity, in identifier form.
  */
-function passwordRefFor(base: string, id: string): string {
+function freshPasswordRef(base: string): string {
   // The identity whole rather than a prefix of it: the name is a store key, and
   // a truncation is a collision waiting for the right pair of connections.
-  return `${base}_${id.replace(/[^A-Za-z0-9]/gu, '')}`
+  return `${base}_${freshId().replace(/[^A-Za-z0-9]/gu, '')}`
 }
 
 /**
@@ -312,17 +313,12 @@ function passwordRefFor(base: string, id: string): string {
  * the dialect's own defaults; a dialect that names none leaves the box empty,
  * and an empty box stays a question for the dialect at call time rather than a
  * value the plugin guesses. The password reference is the exception: it names a
- * secret rather than a server fact, so it is derived per connection.
+ * secret rather than a server fact, so it is freshly minted per connection.
  * @param descriptor - the chosen type, as the Host described it.
  * @param dialect - the type's registry key, used when it names no label.
- * @param id - the identity the draft is saved under.
  * @returns the draft text per shared field.
  */
-function blankFields(
-  descriptor: DialectDescriptor | undefined,
-  dialect: string,
-  id: string,
-): Record<DbFormField, string> {
+function blankFields(descriptor: DialectDescriptor | undefined, dialect: string): Record<DbFormField, string> {
   const defaults = descriptor?.connectionDefaults ?? {}
   return {
     name: descriptor?.label ?? dialect,
@@ -330,11 +326,21 @@ function blankFields(
     port: portText(defaults.port ?? UNSET_PORT),
     user: defaults.user ?? '',
     database: defaults.database ?? '',
-    passwordEnv: passwordRefFor(defaults.passwordEnv ?? DEFAULT_PASSWORD_REF, id),
+    passwordEnv: freshPasswordRef(passwordRefBase(defaults.passwordEnv)),
     connectTimeoutMs: '10000',
     queryTimeoutMs: '30000',
     maxRows: '200',
   }
+}
+
+/**
+ * The name a fresh reference is minted from: what the dialect declares, else the
+ * plugin's own default.
+ * @param declared - the reference the dialect declares for a connection.
+ * @returns the base name, never empty.
+ */
+function passwordRefBase(declared: string | undefined): string {
+  return declared ?? DEFAULT_PASSWORD_REF
 }
 
 /**
@@ -422,6 +428,12 @@ export class DatabaseSettingsController {
       void this.refreshCredentials()
     })
     void this.refreshCredentials()
+    // The edit path needs the dialect's declared facts as much as the new path
+    // does — which fields it adds, and the reference a fresh password name is
+    // minted from — and reading them here keeps the two paths from diverging.
+    // The endpoint behind this names the registered dialects and touches no
+    // database.
+    void this.refreshCatalog()
   }
 
   /** @returns the page's snapshot store. */
@@ -455,12 +467,24 @@ export class DatabaseSettingsController {
         const configFields = descriptor?.configFields ?? []
         const extra: Record<string, string | number> = {}
         for (const field of configFields) extra[field.key] = field.default
-        // One identity, read twice: the reference the draft seeds is derived
-        // from the id it is saved under.
-        const id = freshId()
         this.dialog = {
-          kind: 'form', mode: 'new', id, dialect,
-          configFields, fields: blankFields(descriptor, dialect, id), extra, password: '', probe: { status: 'idle' },
+          kind: 'form', mode: 'new', id: freshId(), dialect,
+          configFields, fields: blankFields(descriptor, dialect), extra, password: '', probe: { status: 'idle' },
+        }
+        this.publish()
+      },
+      newPasswordRef: () => {
+        if (this.dialog.kind !== 'form') return
+        const draft = this.dialog
+        const declared = this.catalog?.installed
+          .find(entry => entry.name === draft.dialect)?.connectionDefaults?.passwordEnv
+        // A different reference holds a secret this draft has never seen, so the
+        // password box stays as the user left it and the probe stops being about
+        // what the draft would save.
+        this.dialog = {
+          ...draft,
+          fields: { ...draft.fields, passwordEnv: freshPasswordRef(passwordRefBase(declared)) },
+          probe: { status: 'idle' },
         }
         this.publish()
       },

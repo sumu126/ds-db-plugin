@@ -245,7 +245,7 @@ assert.equal(opening.available, true, 'the page reports the settings namespace a
 assert.equal(opening.writable, true, 'and as writable')
 assert.deepEqual(opening.cards, [], 'a namespace holding no connection opens with an empty card list')
 assert.deepEqual(opening.dialog, { kind: 'closed' }, 'and no dialog open')
-for (const action of ['openNew', 'openEdit', 'closeDialog', 'chooseDialect', 'editField', 'editExtra', 'editPassword', 'testDraft', 'saveDialog', 'activate', 'testSaved', 'remove']) {
+for (const action of ['openNew', 'openEdit', 'closeDialog', 'chooseDialect', 'editField', 'newPasswordRef', 'editExtra', 'editPassword', 'testDraft', 'saveDialog', 'activate', 'testSaved', 'remove']) {
   assert.ok(typeof face[action] === 'function', `the inject face exposes the "${action}" action`)
 }
 assert.deepEqual([...new Set(bound)], [DB_SETTINGS_NAMESPACE], 'the page and the panel read the one settings namespace they both own')
@@ -267,6 +267,16 @@ assert.equal(
   `two connections seeded from one dialect must not share a reference (got ${seededReferences.join(', ')})`,
 )
 console.log(`credential references: two new connections seed ${seededReferences.join(' and ')}`)
+
+// The refresh control is what a user reaches for once the page has told them a
+// reference is shared, so it has to hand back a name nothing else is on — the
+// same name again would leave the two connections sharing one password.
+const beforeNewRef = face.hooks.dbPage.getSnapshot().dialog.fields.passwordEnv
+face.newPasswordRef()
+const afterNewRef = face.hooks.dbPage.getSnapshot().dialog.fields.passwordEnv
+assert.notEqual(afterNewRef, beforeNewRef, 'the reference control mints a name of its own')
+assert.ok(!seededReferences.includes(afterNewRef), 'and one no connection was already seeded with')
+console.log(`credential references: the reference control then mints ${afterNewRef}`)
 
 // One seat per claimed tool key, keyed by the wire name the shell matches.
 const rows = allSeats().filter(seat => seat.options.name === 'tool.call.toolview')
@@ -323,8 +333,8 @@ console.log('reload: a second mount registers once each and unloads clean')
 
 // ---- The panel's read path -----------------------------------------------
 
-// The page's own gestures above logged their reads too; what this section
-// asserts is the panel's alone.
+// The page's own gestures above logged their reads too; from here the log holds
+// what applying the plugin reads at boot, and then what the panel reads.
 calls.length = 0
 
 /** One saved connection, complete enough that the settings page can resolve it. */
@@ -342,7 +352,12 @@ const panel = allSeats().find(seat => seat.options.name === 'sidebar.right.pane.
 const snapshot = () => panel.hooks.dbBrowse.getSnapshot()
 
 assert.equal(snapshot().connection, 'a', 'the panel opens on the connection the tools address')
-assert.deepEqual(calls, [{ path: DB_DATABASES_PATH, query: { connection: 'A' } }], 'and reads it by name, on the databases route alone')
+// Two reads at boot: the page describes the dialects it offers, and the panel
+// the databases of the connection in use — by name, on that route alone.
+assert.deepEqual(calls, [
+  { path: DB_DIALECTS_PATH, query: {} },
+  { path: DB_DATABASES_PATH, query: { connection: 'A' } },
+], 'the page describes the registered dialects, and the panel reads the connection in use by name')
 assert.deepEqual(snapshot().databases, {
   status: 'ready',
   rows: [{ name: 'app', charset: 'utf8mb4', collation: 'utf8mb4_bin' }],
@@ -351,7 +366,7 @@ console.log('panel read: the databases of the connection in use')
 
 panel.toggleDatabase('app')
 await settle()
-assert.deepEqual(calls[1], { path: DB_TABLES_PATH, query: { connection: 'A', database: 'app' } })
+assert.deepEqual(calls[2], { path: DB_TABLES_PATH, query: { connection: 'A', database: 'app' } })
 assert.deepEqual(snapshot().open.app.tables.rows.map(row => row.name), ['events'], 'a database reads its tables when it is opened')
 panel.toggleDatabase('app')
 assert.equal(snapshot().open.app.open, false, 'and collapsing keeps what it read')
@@ -360,7 +375,7 @@ console.log('panel read: tables on first open, kept through a collapse')
 panel.toggleDatabase('app')
 panel.toggleTable('app', 'events')
 await settle()
-assert.deepEqual(calls[2], { path: DB_COLUMNS_PATH, query: { connection: 'A', database: 'app', table: 'events' } })
+assert.deepEqual(calls[3], { path: DB_COLUMNS_PATH, query: { connection: 'A', database: 'app', table: 'events' } })
 assert.deepEqual(snapshot().open.app.openTables.events.columns.rows.map(row => row.name), ['id'])
 console.log('panel read: columns on first open')
 
