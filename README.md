@@ -96,7 +96,7 @@ npm run build                          # 产出 lib/index.js（host）、lib/cli
 
 > **必须用 pnpm。** 本仓是 pnpm workspace：`pnpm-workspace.yaml` 把 `dialects/*` 声明为成员包，而 `autoInstallPeers: false` 这类开关也只有 pnpm 读。本插件声明的 `@deepseek-ai/*` 全是**宿主运行时提供**的 optional peer，它们没有发布到 npm，包管理器去自动安装只会失败——这条配置就是把这个默认行为关掉。
 >
-> **本项目不发布到 npm**：核心与方言两个清单都带 `private: true`，`npm publish` 被物理拒绝。发行形态是 **tarball**（`pnpm pack`，见「加载插件」B）或源码 checkout（A）。
+> **本项目不发布到 npm**：核心与方言两个清单都带 `private: true`，`npm publish` 被物理拒绝。发行形态有三种：源码 checkout（A）、**tarball**（`pnpm pack`，B）、**git URL**（C）。
 
 `lib/client.js` 是必需产物：`dsh` 的客户端模块扫描读取包的 `exports["./client"]`，改了 `src/client` 必须重新构建。
 
@@ -142,6 +142,28 @@ ds-db (file:///…/ds-db-plugin/lib/index.js): failed to import
   **只装核心是可用状态**：工具照常注册，只是没有可用类型——设置页把已知类型显示为「即将支持」+包名，工具调用返回指明「当前注册了什么」的拒绝。
 
   **只装方言没有意义**：方言运行时 import 核心的 `dsh-ds-db/dialect-api`，核心不在时该行以 `failed to import` 不激活（启动会明确告警，不影响其它行）——事后补装核心即恢复。
+
+**C. 从 git 安装（`dsh plugin add github:…`，已实测）**
+
+两个包都能直接从各自的仓装，不必先把仓库 clone 到本地：
+
+```sh
+dsh plugin --profile web add github:sumu126/ds-db-plugin        # ① 核心
+dsh plugin --profile web add github:sumu126/dsh-dialect-mysql   # ② 方言
+```
+
+方言给的是**镜像仓**，不是本仓：pnpm 的 git spec 取的是**仓根**，而方言在本仓住在子目录 `dialects/mysql/`，取不到。镜像仓的根就是方言包本身（两边的同步关系见[发布前清单](#发布前清单)）。
+
+**第一次 add 会被 pnpm 的构建门禁拦下**（`ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`）：两个包都要在被拉下来的副本里跑 `prepare` 构建出 `lib/`，而 pnpm 默认不允许依赖执行构建脚本。把报错里打印的那一行抄进 profile 的 `pnpm-workspace.yaml`，再重试同一条命令即可——**批准的是这个 commit**，换了 commit 要重新批准：
+
+```yaml
+allowBuilds:
+  # 照 pnpm 打印的原文抄，键里带解析出来的 commit
+  dsh-ds-db@https://codeload.github.com/sumu126/ds-db-plugin/tar.gz/<commit>: true
+  dsh-dialect-mysql@https://codeload.github.com/sumu126/dsh-dialect-mysql/tar.gz/<commit>: true
+```
+
+装完同样用 `dsh --profile web --dump-config` 确认两个层都在（`# == dsh-ds-db` 与 `# == dsh-dialect-mysql`），然后 `dsh --profile web`。A/B/C 三条路装出来的是同一个形态，上面 B 节的「只装核心」/「只装方言」两段同样适用。
 
 ### 设置页
 
@@ -320,7 +342,8 @@ mv <你的方言目录> dialects/clickhouse && cd dialects/clickhouse && npm run
 
 # B. 或复制出去建独立仓分发
 cd <你的方言目录> && git init && npm run verify
-# 分发两条路都行：交付 tarball（装的人 dsh plugin add <你打的 tgz>），或发布到 registry 供他人按包名安装
+# 分发三条路都行：交付 tarball（装的人 dsh plugin add <你打的 tgz>）、把仓地址给他（dsh plugin add github:<你>/<仓>），
+# 或发布到 registry 供他人按包名安装——三条路装出来的是同一个形态（见「加载插件」B、C）
 ```
 
 骨架里每个 `TODO` 都标了要改的位置；动手前建议先读 [`dialects/mysql/src/index.ts`](dialects/mysql/src/index.ts)——那是**完整真实的参考实现**，包括驱动接入、`information_schema` 元数据 SQL、只读规则与投影。
@@ -513,7 +536,7 @@ pnpm install --frozen-lockfile                                             # 一
 
 - **破坏性变更：多连接改造之前的用户文档不再被读取**。设置页保存的连接从「平铺字段」改成了 `connections[]`，旧文档里的 `ds-db.host` / `port` / `user` 等键不在当前 schema 内，会被静默丢弃，工具回落到组合层的默认连接（`127.0.0.1:3306`），需要在新设置页重录一条。这是有意接受的取舍：改造当时两个包都未发布（`npm view dsh-ds-db` / `dsh-dialect-mysql` 均 404），不存在持有旧文档的外部用户，为不存在的安装基础永久保留一条兼容读取路径不划算。组合层（`cordis.yml`）的平铺字段**不受影响**，仍然兼容。
 - **只有 MySQL 一个方言包**：它和第三方方言形状完全一致——自带 `dsh.bundle.patch`，作为独立 bundle 单独安装，核心不引用它。PostgreSQL 与 Oracle 都还没有实现——加 PostgreSQL 便宜（`information_schema` 大体可移植、`?`→`$n` 是机械替换），加 Oracle 贵（无 `LIMIT`、无 `information_schema`、SID 与 service name 两种连法、`oracledb` 是重量级原生依赖）。两者都可以照 `dialects/_template` 起手，并参考 `dialects/mysql` 的完整实现
-- **发行形态是 tarball，不发布到 npm——安装固定走 A/B**：两个清单都带 `private: true`，`npm publish` 被物理拒绝。核心与方言是**两个独立 bundle**，各装一次（见「加载插件」B 节）；核心零依赖，因此不需要任何 override，也不会先以 404 失败一次。tarball 形态**已实测**：核心单独装 exit 0；补装方言后 `--dump-config` 出现 `# == dsh-ds-db` 与 `# == dsh-dialect-mysql` 两个独立层，启动后 `install-probe` 报 `dialects=["mysql"]` 与四个工具；只装核心时 `dialects=[]` 而四个工具仍注册。**git-URL 安装（`dsh plugin add github:…`）在这一形态下未验证**：核心已自包含（零 `dependencies`，`prepare` 也不再依赖旁边的 harness checkout），原先那道障碍不再存在，但本仓没有对这条路径做过端到端复验，所以不写进安装说明
+- **发行形态是 tarball 或 git URL，不发布到 npm——安装走 A/B/C**：两个清单都带 `private: true`，`npm publish` 被物理拒绝。核心与方言是**两个独立 bundle**，各装一次（见「加载插件」B、C 节）；核心零依赖，因此不需要任何 override，也不会先以 404 失败一次。tarball 形态**已实测**：核心单独装 exit 0；补装方言后 `--dump-config` 出现 `# == dsh-ds-db` 与 `# == dsh-dialect-mysql` 两个独立层，启动后 `install-probe` 报 `dialects=["mysql"]` 与四个工具；只装核心时 `dialects=[]` 而四个工具仍注册。**git-URL 安装也已实测**（见「加载插件」C）：核心与方言各一次 `dsh plugin add github:…` 都能装成——`prepare` 在被拉下来的副本里跑通并产出 `lib/`，装出来的形态与 tarball 一致；唯一的额外步骤是首次 add 会被 pnpm 的构建门禁拦下，需要按它打印的那一行批准一次再重试
 - **配置字段是「通用字段 + `extra`」**：Oracle 这类需要 service name 的库可以表达；但 SQLite 这类没有 host/port 概念的库仍会看到多余字段，届时升级为「字段完全由方言声明」（见 [`docs/05_Docs/decisions/`](docs/05_Docs/decisions/)）
 - **命名已全中立**：工具名（`db_*`）、设置命名空间（`ds-db`）、路由（`/api/ds-db/*`）、字典命名空间（`settings.db`）、默认凭据引用（`DSH_DB_PASSWORD`）都不含数据库类型字样；带 `MYSQL_*` 的标识符只出现在 `dsh-dialect-mysql` 包内——那是这个方言自己的名字
 - **定义式包（Definition）未抽出——有意偏离**：`DatabaseDialect`、只读规则、值投影与注册表定义仍住在 `dsh-ds-db` 内，所以**方言包 peer 依赖的是整个插件**（工具、设置页、客户端都在里面），而不是一份接口契约。这偏离了第一方 `dsh-shell`（定义）/ `dsh-bash-local`（实现）的 Shape。
