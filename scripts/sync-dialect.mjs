@@ -99,36 +99,44 @@ for (const file of lines(git(mirror, ['ls-files']))) {
   removed.push(file)
 }
 
-if (git(mirror, ['status', '--porcelain']) === '') {
-  console.log(`already in sync: ${copied} copied, ${removed.length} removed, nothing to commit`)
-  process.exit(0)
+const changed = git(mirror, ['status', '--porcelain']) !== ''
+const version = JSON.parse(readFileSync(join(mirror, 'package.json'), 'utf8')).version
+const branch = git(mirror, ['branch', '--show-current'])
+
+if (changed) {
+  git(mirror, ['add', '-A'])
+  const from = git(root, ['rev-parse', 'HEAD'])
+  git(mirror, ['commit', '-m', [
+    `sync from ds-db-plugin@${from.slice(0, 7)}`,
+    '',
+    `Mirror of \`${dialect}\` in ds-db-plugin. That repository is the source of truth;`,
+    'this one exists so the dialect installs on its own, without the plugin repo.',
+    '',
+    `Copied ${String(copied)}, removed ${String(removed.length)}.`,
+  ].join('\n')])
+  console.log(`synced ${dialect} -> ${mirror}`)
+  console.log(`  copied ${String(copied)}, removed ${String(removed.length)}`)
+  console.log(`  commit ${git(mirror, ['rev-parse', 'HEAD']).slice(0, 7)} on ${branch}`)
+} else {
+  // Nothing to write here — but the branch may still hold commits an earlier run
+  // could not push, so the push below must not be skipped just because the copy
+  // step had nothing to do. A failed push must never leave the two silently apart.
+  console.log(`content already in sync: ${String(copied)} copied, ${String(removed.length)} removed, nothing to commit`)
+  console.log(`  head   ${git(mirror, ['rev-parse', 'HEAD']).slice(0, 7)} on ${branch}`)
 }
 
-git(mirror, ['add', '-A'])
-const from = git(root, ['rev-parse', 'HEAD'])
-const version = JSON.parse(readFileSync(join(mirror, 'package.json'), 'utf8')).version
-git(mirror, ['commit', '-m', [
-  `sync from ds-db-plugin@${from.slice(0, 7)}`,
-  '',
-  `Mirror of \`${dialect}\` in ds-db-plugin. That repository is the source of truth;`,
-  'this one exists so the dialect installs on its own, without the plugin repo.',
-  '',
-  `Copied ${String(copied)}, removed ${String(removed.length)}.`,
-].join('\n')])
-
-const branch = git(mirror, ['branch', '--show-current'])
-console.log(`synced ${dialect} -> ${mirror}`)
-console.log(`  copied ${String(copied)}, removed ${String(removed.length)}`)
-console.log(`  commit ${git(mirror, ['rev-parse', 'HEAD']).slice(0, 7)} on ${branch}`)
-
-if (flags.has('--tag')) {
+// Only a run that wrote a commit has something new for the tag to name: re-tagging
+// on a no-op run would move a tag that is already published, for no content change.
+if (flags.has('--tag') && changed) {
   git(mirror, ['tag', '-f', `v${version}`])
   console.log(`  tag    v${version}`)
+} else if (flags.has('--tag')) {
+  console.log(`  tag    left alone (nothing changed)`)
 }
 if (flags.has('--push')) {
   git(mirror, ['push', 'origin', branch])
   console.log(`  pushed ${branch}`)
-  if (flags.has('--tag')) {
+  if (flags.has('--tag') && changed) {
     git(mirror, ['push', 'origin', `v${version}`])
     console.log(`  pushed v${version}`)
   }
