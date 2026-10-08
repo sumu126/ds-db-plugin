@@ -18,6 +18,7 @@ import * as mysqlReadOnly from '../src/index.ts'
 import { dialectCatalog } from '../src/index.ts'
 import { DatabaseAccess } from '../src/connection.ts'
 import { CARD_BYTES } from '../src/card-budget.ts'
+import { DB_DATABASES_PATH, DB_TABLES_PATH } from '../src/contract.ts'
 import * as mysqlDialect from '../dialects/mysql/src/index.ts'
 import { MYSQL_DIALECT } from '../dialects/mysql/src/index.ts'
 
@@ -135,6 +136,50 @@ async function mount(config, dialectConfig = {}) {
 }
 
 const ctx = await mount(UNREACHABLE)
+
+/**
+ * Mount the plugin with a stand-in browser carrier, so the routes it registers
+ * on the Fetch channel are reachable from a check.
+ *
+ * The carrier stands in for `@deepseek-ai/dsh-client-connection`'s host half: it
+ * records what the plugin registered instead of serving it. It arrives after the
+ * plugin, which is the real order too — the plugin's injection is the wait.
+ * @param config - the composition values to mount with.
+ * @returns the mounted context, and the routes the plugin registered by path.
+ */
+async function mountWithRoutes(config) {
+  const routes = new Map()
+  const context = await mount(config)
+  context.provide('connection', {
+    fetch: {
+      register: (route) => {
+        routes.set(route.path, route)
+        return () => { routes.delete(route.path) }
+      },
+    },
+  })
+  // Four routes: the probe, the dialect catalog, and the two catalog reads.
+  for (let attempt = 0; attempt < 100 && routes.size < 4; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+  return { context, routes }
+}
+
+/**
+ * Call one registered route the way the page does.
+ * @param routes - the registered routes by path.
+ * @param path - the route to call.
+ * @param query - query parameters to send.
+ * @returns the response's status and parsed body.
+ */
+async function callRoute(routes, path, query = {}) {
+  const route = routes.get(path)
+  assert.ok(route !== undefined, `${path} is registered`)
+  const url = new URL(`http://127.0.0.1${path}`)
+  for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value)
+  const response = await route.fetch(new Request(url, { method: 'GET' }))
+  return { status: response.status, body: await response.json() }
+}
 
 for (const name of TOOL_NAMES) {
   const definition = ctx.tools.get(name)
@@ -728,6 +773,81 @@ assert.throws(
   /declares unknown capability "teleport"/,
 )
 console.log('capability check: an unknown capability is refused at registration')
+
+// ---- The browser catalog's two read routes -------------------------------
+
+/** One saved connection the catalog checks address; only its dialect varies. */
+const CATALOG_CONNECTION = {
+  id: 'a', name: 'A', dialect: 'postgres', host: '10.0.0.1', port: 1, user: 'reader', database: '',
+  passwordEnv: 'A_PASSWORD', connectTimeoutMs: 10000, queryTimeoutMs: 30000, maxRows: 200,
+}
+
+// The catalog reads the same two dialect queries the listing tools run, through
+// the same session runner, so a panel and a model are shown one list.
+const catalogHost = await mountWithRoutes({ connections: [CATALOG_CONNECTION], activeId: 'a' })
+catalogHost.context.databaseDialects.register(standInDialect('PostgreSQL', '16.3'))
+
+const catalogDatabases = await callRoute(catalogHost.routes, DB_DATABASES_PATH)
+assert.equal(catalogDatabases.status, 200, 'a catalog read answers the page')
+assert.deepEqual(catalogDatabases.body, {
+  connection: 'A',
+  databases: [{ name: 'app', charset: '', collation: '' }],
+})
+console.log(`catalog databases: ${JSON.stringify(catalogDatabases.body)}`)
+
+const catalogTables = await callRoute(catalogHost.routes, DB_TABLES_PATH, { database: 'app' })
+assert.deepEqual(catalogTables.body, {
+  connection: 'A',
+  database: 'app',
+  tables: [{ name: 'events', type: 'BASE TABLE', engine: null, estimatedRows: null, comment: '' }],
+})
+console.log(`catalog tables: ${JSON.stringify(catalogTables.body)}`)
+
+// A request that names no database is refused rather than resolved to the
+// connection's default: a panel always lists a database the user opened.
+const catalogNoDatabase = await callRoute(catalogHost.routes, DB_TABLES_PATH)
+assert.deepEqual(catalogNoDatabase.body, { database: '', tables: [], message: 'the request names no database' })
+console.log(`catalog without a database: ${catalogNoDatabase.body.message}`)
+
+// A refusal is a value, so the transport still answers and a panel renders the
+// sentence instead of reporting a failed request.
+const catalogUnknown = await callRoute(catalogHost.routes, DB_DATABASES_PATH, { connection: 'nope' })
+assert.equal(catalogUnknown.status, 200, 'a refusal is a body, not a failed response')
+assert.deepEqual(catalogUnknown.body.databases, [])
+assert.match(catalogUnknown.body.message, /no saved connection is named "nope"; saved connections: A/)
+console.log(`catalog with an unknown connection: ${catalogUnknown.body.message}`)
+
+await catalogHost.context.fiber.dispose()
+
+// A dialect that cannot list tables is refused in the tool's own wording, so a
+// panel and a model read one sentence about the same missing ability.
+const bareHost = await mountWithRoutes({
+  connections: [{ ...CATALOG_CONNECTION, dialect: 'bare' }],
+  activeId: 'a',
+})
+bareHost.context.databaseDialects.register({
+  ...standInDialect('PostgreSQL', '16.3', 'bare'),
+  capabilities: new Set(['columns']),
+})
+const catalogUnsupported = await callRoute(bareHost.routes, DB_TABLES_PATH, { database: 'app' })
+assert.deepEqual(catalogUnsupported.body.tables, [])
+assert.match(catalogUnsupported.body.message, /PostgreSQL connection does not support tables/)
+console.log(`catalog without the capability: ${catalogUnsupported.body.message}`)
+await bareHost.context.fiber.dispose()
+
+// The server's own schemas are left out, the way `db_databases` leaves them out.
+const hidingHost = await mountWithRoutes({
+  connections: [{ ...CATALOG_CONNECTION, dialect: 'hides' }],
+  activeId: 'a',
+})
+hidingHost.context.databaseDialects.register({
+  ...standInDialect('PostgreSQL', '16.3', 'hides'),
+  systemDatabases: ['app'],
+})
+const catalogHidden = await callRoute(hidingHost.routes, DB_DATABASES_PATH)
+assert.deepEqual(catalogHidden.body.databases, [], 'the one database listed is the server own schema')
+console.log('catalog: the server own schemas are omitted')
+await hidingHost.context.fiber.dispose()
 
 // Unload through the framework, so the session's disposers run.
 await ctx.fiber.dispose()

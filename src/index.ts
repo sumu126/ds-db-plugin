@@ -1,8 +1,8 @@
 /**
  * Host half of the database plugin: it owns the session runner, registers the
  * model-facing tools, publishes the settings namespace the configuration page
- * edits, and serves the page's connection probes on the authenticated API
- * channel.
+ * edits, and serves the page's connection probes and the browser catalog's
+ * listings on the authenticated API channel.
  *
  * The settings section holds a list of saved connections and the one the tools
  * address; every operation resolves the active connection at that moment, so a
@@ -24,15 +24,16 @@ import type {} from '@deepseek-ai/dsh-tools'
 import type { HostConnectionHandle } from '@deepseek-ai/dsh-client-connection'
 import { CARD_BUDGET, type CardBudget } from './card-budget.ts'
 import { DatabaseAccess, SESSION_LIMIT } from './connection.ts'
-import { activeConnection } from './connections.ts'
+import { activeConnection, addressedConnection } from './connections.ts'
 import {
-  DB_DIALECTS_PATH, DB_SETTINGS_NAMESPACE, DB_TEST_PATH, UNSET_PORT,
-  type ConnectionProfile, type DatabaseSettings, type DialectCatalog, type KnownDialectPackage, type ProbeRequest,
+  DB_DATABASES_PATH, DB_DIALECTS_PATH, DB_SETTINGS_NAMESPACE, DB_TABLES_PATH, DB_TEST_PATH, UNSET_PORT,
+  type ConnectionProfile, type DatabaseListing, type DatabaseSettings, type DialectCatalog,
+  type KnownDialectPackage, type ProbeRequest, type TableListing,
 } from './contract.ts'
 import { SHIPPED_DIALECT_PACKAGES } from './dialect-catalog.ts'
 import { DatabaseDialectRegistry, dialectFacts, resolveDialect, type DatabaseConnection, type DatabaseDialect } from './dialect.ts'
 import { compositionEntry, Config, DatabaseSettingsSchema, DIALECT_WAIT_MS, SAMPLE_ROWS } from './settings.ts'
-import { applyDatabaseTools } from './tools.ts'
+import { applyDatabaseTools, requireCapability } from './tools.ts'
 
 export type { ConnectionProfile, DatabaseSettings } from './contract.ts'
 export type { ConnectionSummary } from './connections.ts'
@@ -197,6 +198,48 @@ export function apply(ctx: Context, config: Config): void {
         })
       },
     }), `ds-db: GET ${DB_DIALECTS_PATH}`)
+
+    // The browser catalog addresses a connection the same way a tool call does,
+    // through the one function both use, so a panel and a call cannot disagree
+    // about which server a name reaches.
+    const addressed = (requested: string | undefined): { profile: ConnectionProfile, view: DatabaseDialect } =>
+      addressedConnection(readSettings(), requested, readDialectFor)
+
+    // The catalog reads the two dialect queries the listing tools run, on the
+    // same session runner, so the panel and the model are shown one list rather
+    // than two that can drift. A refusal is a value here too: the panel renders
+    // it beside a retry instead of reporting a transport failure.
+    webCtx.effect(() => connection.fetch.register({
+      path: DB_DATABASES_PATH,
+      methods: ['GET'],
+      requestBody: 'buffered',
+      fetch: async (request): Promise<Response> => Response.json(
+        await listDatabases(
+          { addressed, access },
+          new URL(request.url).searchParams.get('connection') ?? undefined,
+          request.signal,
+        ),
+        { headers: { 'cache-control': 'no-store' } },
+      ),
+    }), `ds-db: GET ${DB_DATABASES_PATH}`)
+
+    webCtx.effect(() => connection.fetch.register({
+      path: DB_TABLES_PATH,
+      methods: ['GET'],
+      requestBody: 'buffered',
+      fetch: async (request): Promise<Response> => {
+        const query = new URL(request.url).searchParams
+        return Response.json(
+          await listTables(
+            { addressed, access },
+            query.get('connection') ?? undefined,
+            query.get('database') ?? '',
+            request.signal,
+          ),
+          { headers: { 'cache-control': 'no-store' } },
+        )
+      },
+    }), `ds-db: GET ${DB_TABLES_PATH}`)
   })
 }
 
@@ -358,5 +401,83 @@ async function probeProfile(
     }
   } catch (error: unknown) {
     return { ok: false, message: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+/** What one browser catalog read addresses, and how it runs. */
+interface CatalogReadFace {
+  /** The connection a request named, resolved together with its dialect. */
+  addressed: (requested: string | undefined) => { profile: ConnectionProfile, view: DatabaseDialect }
+  /** The session runner, so a catalog read is bounded exactly as a tool call is. */
+  access: DatabaseAccess
+}
+
+/**
+ * List the databases one connection sees, for the browser catalog.
+ *
+ * The dialect query, the session runner, and the two capability concessions are
+ * the `db_databases` tool's, so a panel and a call are shown one list: a type
+ * that cannot report a character set has it blanked rather than invented, and
+ * the server's own schemas are omitted.
+ * @param face - addressing and the session runner.
+ * @param requested - the connection the request named, if any.
+ * @param signal - the request's cancellation, so a panel that navigated away
+ * stops waiting on the server instead of holding a session until the timeout.
+ * @returns the databases, or the refusal the panel renders in their place.
+ */
+async function listDatabases(
+  face: CatalogReadFace,
+  requested: string | undefined,
+  signal?: AbortSignal,
+): Promise<DatabaseListing> {
+  try {
+    const { profile: target, view } = face.addressed(requested)
+    requireCapability(view, 'databases')
+    const databases = await face.access.run(target, view.databases(), signal)
+    return {
+      connection: target.name,
+      databases: databases
+        .filter(row => !view.systemDatabases.includes(row.name))
+        .map(row => view.capabilities.has('charset') ? row : { ...row, charset: '', collation: '' }),
+    }
+  } catch (error: unknown) {
+    return { databases: [], message: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+/**
+ * List the tables and views of one database, for the browser catalog.
+ *
+ * A request that names no database is refused rather than resolved to the
+ * connection's default: a panel always lists a database the user opened, and
+ * silently listing another one would answer a question nobody asked.
+ * @param face - addressing and the session runner.
+ * @param requested - the connection the request named, if any.
+ * @param database - the database the request named.
+ * @param signal - the request's cancellation.
+ * @returns the tables, or the refusal the panel renders in their place.
+ */
+async function listTables(
+  face: CatalogReadFace,
+  requested: string | undefined,
+  database: string,
+  signal?: AbortSignal,
+): Promise<TableListing> {
+  const wanted = database.trim()
+  if (wanted.length === 0) return { database: '', tables: [], message: 'the request names no database' }
+  try {
+    const { profile: target, view } = face.addressed(requested)
+    requireCapability(view, 'tables')
+    const tables = await face.access.run(target, view.tables(wanted), signal)
+    return {
+      connection: target.name,
+      database: wanted,
+      // As in `db_tables`: a server that cannot estimate row counts reports
+      // none rather than letting its dialect invent a number the panel would
+      // show as fact.
+      tables: tables.map(row => view.capabilities.has('estimatedRows') ? row : { ...row, estimatedRows: null }),
+    }
+  } catch (error: unknown) {
+    return { database: wanted, tables: [], message: error instanceof Error ? error.message : String(error) }
   }
 }

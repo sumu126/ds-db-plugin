@@ -20,7 +20,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { CardBudget } from './card-budget.ts'
 import type { ConnectionDefaults, ConnectionProfile, DatabaseSettings } from './contract.ts'
-import { connectionSummaries, resolveProfile } from './connections.ts'
+import { addressedConnection, connectionSummaries } from './connections.ts'
 import type { DatabaseAccess } from './connection.ts'
 import type { DatabaseDialect, DialectCapability, DialectFacts, DialectIndexRow, DialectTableRow } from './dialect.ts'
 import { assertReadOnlyStatement, familiesPhrase } from './sql-guard.ts'
@@ -172,16 +172,17 @@ const CONNECTION_PARAMETER = {
 }
 
 /**
- * Refuse one call whose capability the dialect in force does not declare.
+ * Refuse one caller whose capability the dialect in force does not declare.
  *
  * A missing capability is a contract fact, not a failure to paper over: the
- * tool says the server cannot answer, so a model asks for something else rather
- * than waiting on a statement that does not exist.
+ * caller is told the server cannot answer, so a model asks for something else
+ * rather than waiting on a statement that does not exist. The browser catalog
+ * refuses on the same terms, so the panel and the model read one wording.
  * @param dialect - the dialect in force.
- * @param capability - the ability this call needs.
+ * @param capability - the ability this caller needs.
  * @throws {Error} when the dialect does not declare it.
  */
-function requireCapability(dialect: DatabaseDialect, capability: DialectCapability): void {
+export function requireCapability(dialect: DatabaseDialect, capability: DialectCapability): void {
   if (!dialect.capabilities.has(capability)) {
     throw new Error(`this ${dialect.label} connection does not support ${capability}, so this call cannot be answered`)
   }
@@ -224,10 +225,8 @@ export function applyDatabaseTools(ctx: Context, face: DatabaseToolsFace): void 
    * @param requested - the connection the call named, if any.
    * @returns the profile and its dialect.
    */
-  const addressed = (requested: string | undefined): { profile: ConnectionProfile, view: DatabaseDialect } => {
-    const profile = resolveProfile(settings(), requested)
-    return { profile, view: dialectFor(profile) }
-  }
+  const addressed = (requested: string | undefined): { profile: ConnectionProfile, view: DatabaseDialect } =>
+    addressedConnection(settings(), requested, dialectFor)
 
   ctx.tools.register(defineTool({
     name: 'db_databases',

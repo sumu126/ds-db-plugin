@@ -21,6 +21,12 @@ export const DB_TEST_PATH = '/api/ds-db/test'
 /** Exact Fetch route the page reads the installable database types from. */
 export const DB_DIALECTS_PATH = '/api/ds-db/dialects'
 
+/** Exact Fetch route the browser catalog reads the databases of one connection from. */
+export const DB_DATABASES_PATH = '/api/ds-db/databases'
+
+/** Exact Fetch route the browser catalog reads the tables of one database from. */
+export const DB_TABLES_PATH = '/api/ds-db/tables'
+
 /** Credential reference a connection uses when its dialect declares none. */
 export const DEFAULT_PASSWORD_REF = 'DSH_DB_PASSWORD'
 
@@ -152,6 +158,59 @@ export interface DialectCatalog {
   installed: DialectDescriptor[]
   /** Known types no package has registered here. */
   known: KnownDialectPackage[]
+}
+
+/** One database as the browser catalog lists it. */
+export interface DatabaseNode {
+  /** Database name. */
+  name: string
+  /** Default character set, empty when the server reports none or the type cannot report one. */
+  charset: string
+  /** Default collation, empty on {@link charset}'s terms. */
+  collation: string
+}
+
+/** One table or view as the browser catalog lists it. */
+export interface TableNode {
+  /** Table or view name. */
+  name: string
+  /** How the server classifies it: a stored table or a view. */
+  type: string
+  /** Storage engine, or null where the server has none. */
+  engine: string | null
+  /** Row-count estimate, or null where the server cannot estimate it. */
+  estimatedRows: number | null
+  /** Table comment, empty when it carries none. */
+  comment: string
+}
+
+/**
+ * What the browser catalog reads from the databases route.
+ *
+ * A refusal is a value here, exactly as it is on the probe route: the panel
+ * renders `message` beside a retry instead of reporting a transport failure.
+ * The server's own schemas are omitted, the way `db_databases` omits them, so
+ * the panel and the model are shown one list.
+ */
+export interface DatabaseListing {
+  /** The connection the list came from, by name; absent when nothing could be listed. */
+  connection?: string
+  /** Databases the connection sees, in server order. */
+  databases: DatabaseNode[]
+  /** Why there is no list, as one sentence the panel shows. */
+  message?: string
+}
+
+/** What the browser catalog reads from the tables route. */
+export interface TableListing {
+  /** The connection the list came from, by name; absent when nothing could be listed. */
+  connection?: string
+  /** Database the tables were listed from, echoed as asked. */
+  database: string
+  /** Tables and views of that database, in server order. */
+  tables: TableNode[]
+  /** Why there is no list, as one sentence the panel shows. */
+  message?: string
 }
 
 /**

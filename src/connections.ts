@@ -9,6 +9,7 @@
  */
 
 import { UNSET_PORT, type ConnectionDefaults, type ConnectionProfile, type DatabaseSettings } from './contract.ts'
+import type { DatabaseDialect } from './dialect.ts'
 
 /** What one saved connection really reaches, once its dialect's defaults apply. */
 export interface EffectiveConnection {
@@ -120,6 +121,28 @@ export function resolveProfile(settings: DatabaseSettings, requested: string | u
   throw new Error(settings.connections.length === 0
     ? 'no database connection is saved; add one on the database settings page'
     : `no saved connection is named "${wanted}"; saved connections: ${names}`)
+}
+
+/**
+ * The connection one operation addresses, and the dialect it runs through.
+ *
+ * The two travel together because a caller may address any saved connection and
+ * must then run through that connection's own type. Tool calls and the browser
+ * catalog resolve both here, so what the model is told and what the panel lists
+ * cannot drift apart.
+ * @param settings - the current settings section.
+ * @param requested - the name or id the caller named, if any.
+ * @param dialectFor - the deployment's registry reader.
+ * @returns the profile to run against, and the dialect to run it through.
+ * @throws {Error} on {@link resolveProfile}'s terms, and when the dialect is not registered.
+ */
+export function addressedConnection(
+  settings: DatabaseSettings,
+  requested: string | undefined,
+  dialectFor: (profile: ConnectionProfile) => DatabaseDialect,
+): { profile: ConnectionProfile, view: DatabaseDialect } {
+  const profile = resolveProfile(settings, requested)
+  return { profile, view: dialectFor(profile) }
 }
 
 /**
