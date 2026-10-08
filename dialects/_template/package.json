@@ -5,7 +5,17 @@
   "description": "Starting point for a dsh-ds-db dialect: copy this directory, rename it, and replace the marked parts.",
   "type": "module",
   "main": "lib/index.js",
+  "files": [
+    "lib",
+    "src",
+    "cordis.patch.yml"
+  ],
   "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
   "scripts": {
     "build": "node scripts/build.mjs",
     "prepare": "npm run build",
@@ -23,6 +33,7 @@
     "@deepseek-ai/cordis": "*",
     "@types/node": "^22.20.0",
     "dsh-ds-db": "file:../..",
+    "esbuild": "^0.25.0",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3"
   }

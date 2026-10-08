@@ -1,0 +1,10 @@
+# 这一行是方言包自己那一层：加载器靠它把方言注册进核心的注册表。
+#
+# TODO: 把两处 <name> 换成你自己的方言——`id` 是这一行在组合里的键，`name` 是包名。
+# 改完记得核对 package.json 的 `dsh.bundle.patch` 指向本文件。
+#
+# 核心不引用你，也不需要在核心的 patch 里加任何东西：核心的 `dependencies` 是空的，
+# 每个方言都自带这样一份 patch。这正是第三方方言与本仓方言同形的原因。
+- insert:
+    - id: 'dialect-<name>'
+      name: 'dsh-dialect-<name>'
