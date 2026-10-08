@@ -80,6 +80,18 @@ pnpm pack ./dialects/mysql --pack-destination .
 
 核心与方言是**两个独立的 bundle**，所以安装也是两次 `dsh plugin add`——装核心不会把方言带上。
 
+## 独立发布仓是镜像
+
+`dialects/mysql/` 另有一个发布仓：[`dsh-dialect-mysql`](https://github.com/sumu126/dsh-dialect-mysql)，好让别人不装插件仓也能单独装这个方言。
+
+**源永远是本仓这一份**：门禁（`verify:*`）与打包（`pnpm pack ./dialects/mysql`）都跑它，镜像只是副本。发版时同步：
+
+```sh
+pnpm run sync:dialect -- <镜像的本地检出> --tag --push
+```
+
+脚本按 `git ls-files dialects/mysql` 取内容、删掉镜像里多出来的文件（镜像自己的 `.gitignore` 除外），并把来源 commit 写进提交信息；**源侧有未提交改动会被拒绝**——否则镜像会声称自己来自一个并不包含这些内容的 commit。不带 `--tag` / `--push` 就只在镜像里本地提交。
+
 ## 一个已知的依赖方向偏离（有意）
 
 本仓的方言包 `peerDependencies` 是 **`dsh-ds-db`（整个插件）**，不是一份接口契约包。第一方 harness 不这样做：`dsh-bash-local` 只 peer `dsh-shell`（定义），绝不 peer `dsh-tool-bash`（消费者）。

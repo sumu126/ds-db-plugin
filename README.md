@@ -76,6 +76,8 @@
 └── .dev/                   # 开发用临时目录（三个生成的 overlay，不入库）
 ```
 
+方言另有一个**发布镜像仓**：[`dsh-dialect-mysql`](https://github.com/sumu126/dsh-dialect-mysql)。源始终是本仓的 `dialects/mysql/`（门禁与打包都跑这一份）；镜像的存在只是让别人不装插件仓也能单独装方言。发版时同步，脚本会把镜像的提交标上来源 commit，所以两边不会悄悄漂移——见[发布前清单](#发布前清单)。
+
 ## 快速开始（使用者）
 
 ### 前置条件
@@ -458,7 +460,11 @@ dsh --profile web --dump-config | grep -E 'dsh-ds-db|dsh-dialect-mysql'   # 两�
 dsh --profile web                     # 起得来、无 FAILED fiber、模型侧能看到 db_connections
 # 顺手在装出来的那一版上跑 db:live / card:live —— 别人替代不了这条验据
 git tag v0.1.0                        # 只有上面全绿才打
+# 方言的发布镜像跟着这一版走：同步 + 打 v<version> + 推（镜像仓的本地检出路径作为参数）
+pnpm run sync:dialect -- <镜像检出> --tag --push
 ```
+
+`sync:dialect` 按 `git ls-files dialects/mysql` 取内容，删掉镜像里多出来的文件（镜像自己的 `.gitignore` 除外），并把来源 commit 写进提交信息；**源侧有未提交改动会被拒绝**（否则镜像会声称自己来自一个并不包含这些内容的 commit）。不带 `--tag` / `--push` 就只在镜像里本地提交；tag 推送不加 `--force`——移动一个已发布的 tag 该由人决定。
 
 `--frozen-lockfile` 只说"此刻一致"，不说"真的重生成了"。三条判据一起看才分得清：
 
@@ -511,7 +517,7 @@ pnpm install --frozen-lockfile                                             # 一
 - **配置字段是「通用字段 + `extra`」**：Oracle 这类需要 service name 的库可以表达；但 SQLite 这类没有 host/port 概念的库仍会看到多余字段，届时升级为「字段完全由方言声明」（见 [`docs/05_Docs/decisions/`](docs/05_Docs/decisions/)）
 - **命名已全中立**：工具名（`db_*`）、设置命名空间（`ds-db`）、路由（`/api/ds-db/*`）、字典命名空间（`settings.db`）、默认凭据引用（`DSH_DB_PASSWORD`）都不含数据库类型字样；带 `MYSQL_*` 的标识符只出现在 `dsh-dialect-mysql` 包内——那是这个方言自己的名字
 - **定义式包（Definition）未抽出——有意偏离**：`DatabaseDialect`、只读规则、值投影与注册表定义仍住在 `dsh-ds-db` 内，所以**方言包 peer 依赖的是整个插件**（工具、设置页、客户端都在里面），而不是一份接口契约。这偏离了第一方 `dsh-shell`（定义）/ `dsh-bash-local`（实现）的 Shape。
-  取舍理由：目前唯一的官方方言是 `dsh-dialect-mysql`——与本插件同仓、同版本、同一次提交（作为独立 bundle 打包，但不独立发版）；拆出第二个发布物会引入独立版本线与构建顺序，而收益（方言包依赖面收窄）在只有一个方言时不成立。
+  取舍理由：目前唯一的官方方言是 `dsh-dialect-mysql`——与本插件同仓、同版本、同一次提交（作为独立 bundle 打包；另有一个发布镜像仓，但源在本仓，见[组成](#组成)）；拆出第二个发布物会引入独立版本线与构建顺序，而收益（方言包依赖面收窄）在只有一个方言时不成立。
   **触发条件**：出现任何需要**独立发布**的仓外方言时，把 `dialect` / `sql-guard` / `value` / `dialect-audit` 抽成 `dsh-db-dialect-api`，两个消费者改为只依赖它。其中**「方言不再够到 TypeScript 源码」这一半已完成**：`dsh-ds-db/dialect-api` 是构建产物，方言只依赖它（`grep -rn "dsh-ds-db/src" dialects/` 已为空）。剩下的是包级依赖面——方言仍 peer 整个插件包。验收标准：`dialects/*/package.json` 不再出现 `dsh-ds-db`。
 - **远程调用面走低层通道——有意偏离**：设置页用 `connection.fetch.register` 的自定义路由 + 裸 `fetch`，而不是 Typert `@Remote`（第一方 `file-upload`、`session-log-export` 是同款用法）。原因是**仓外插件无法运行仓内的 typert 生成管线**（需要 `./typert`、`./remote` 产物与 generator 参与构建）。代价是失去生成类型与统一失败词汇，`contract.ts` 里的 wire 形状是手写的——客户端因此必须自己补齐字段（`completeDescriptor`）。**触发条件**：插件进入第一方仓库，或 typert 提供面向仓外插件的生成入口。
 - **MySQL 上的取消是「退役会话」而非「中断语句」**：mysql2 的 Promise pool 没有 `destroy()`、只有 `end()`，所以中止一次调用会让池关闭、而 `COM_QUIT` 排在正在执行的语句之后——**服务端那条语句会跑完**；随后该会话被淘汰、下一次调用重建连接。要真正中断需要方言自己持有单条连接（`pool.getConnection()` → `conn.query()` → abort 时 `conn.destroy()`）

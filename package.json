@@ -58,6 +58,7 @@
     "test": "node --import tsx/esm --test dialects/mysql/tests/sql-guard.test.ts dialects/mysql/tests/dialect.test.ts dialects/mysql/tests/contract-audit.test.ts",
     "test:dialects": "npm --prefix dialects/mysql test",
     "overlay": "node scripts/dev-overlay.mjs",
+    "sync:dialect": "node scripts/sync-dialect.mjs",
     "verify:host": "node --import tsx/esm scripts/verify-host.mjs",
     "verify:settings": "node --import tsx/esm scripts/verify-settings.mts",
     "verify:loader": "node --import tsx/esm tests/loader-smoke.mjs",
