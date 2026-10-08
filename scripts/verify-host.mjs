@@ -18,7 +18,7 @@ import * as mysqlReadOnly from '../src/index.ts'
 import { dialectCatalog } from '../src/index.ts'
 import { DatabaseAccess } from '../src/connection.ts'
 import { CARD_BYTES } from '../src/card-budget.ts'
-import { DB_DATABASES_PATH, DB_TABLES_PATH } from '../src/contract.ts'
+import { DB_COLUMNS_PATH, DB_DATABASES_PATH, DB_TABLES_PATH } from '../src/contract.ts'
 import * as mysqlDialect from '../dialects/mysql/src/index.ts'
 import { MYSQL_DIALECT } from '../dialects/mysql/src/index.ts'
 
@@ -158,8 +158,8 @@ async function mountWithRoutes(config) {
       },
     },
   })
-  // Four routes: the probe, the dialect catalog, and the two catalog reads.
-  for (let attempt = 0; attempt < 100 && routes.size < 4; attempt++) {
+  // Five routes: the probe, the dialect catalog, and the three catalog reads.
+  for (let attempt = 0; attempt < 100 && routes.size < 5; attempt++) {
     await new Promise(resolve => setTimeout(resolve, 10))
   }
   return { context, routes }
@@ -803,6 +803,23 @@ assert.deepEqual(catalogTables.body, {
 })
 console.log(`catalog tables: ${JSON.stringify(catalogTables.body)}`)
 
+const catalogColumns = await callRoute(catalogHost.routes, DB_COLUMNS_PATH, { database: 'app', table: 'events' })
+assert.deepEqual(catalogColumns.body, {
+  connection: 'A',
+  database: 'app',
+  table: 'events',
+  columns: [{ name: 'id', type: 'integer', nullable: false, default: null, key: '', extra: '', comment: '' }],
+})
+console.log(`catalog columns: ${JSON.stringify(catalogColumns.body)}`)
+
+// Every level below the connection has to be named: a request that names none is
+// refused rather than resolved to a default nobody asked for.
+const catalogNoTable = await callRoute(catalogHost.routes, DB_COLUMNS_PATH, { database: 'app' })
+assert.deepEqual(catalogNoTable.body, {
+  database: 'app', table: '', columns: [], message: 'the request names no table',
+})
+console.log(`catalog without a table: ${catalogNoTable.body.message}`)
+
 // A request that names no database is refused rather than resolved to the
 // connection's default: a panel always lists a database the user opened.
 const catalogNoDatabase = await callRoute(catalogHost.routes, DB_TABLES_PATH)
@@ -819,20 +836,26 @@ console.log(`catalog with an unknown connection: ${catalogUnknown.body.message}`
 
 await catalogHost.context.fiber.dispose()
 
-// A dialect that cannot list tables is refused in the tool's own wording, so a
-// panel and a model read one sentence about the same missing ability.
+// A dialect that cannot list tables or columns is refused in the tool's own
+// wording, so a panel and a model read one sentence about the same missing
+// ability rather than a panel-shaped one.
 const bareHost = await mountWithRoutes({
   connections: [{ ...CATALOG_CONNECTION, dialect: 'bare' }],
   activeId: 'a',
 })
 bareHost.context.databaseDialects.register({
   ...standInDialect('PostgreSQL', '16.3', 'bare'),
-  capabilities: new Set(['columns']),
+  capabilities: new Set(),
 })
 const catalogUnsupported = await callRoute(bareHost.routes, DB_TABLES_PATH, { database: 'app' })
 assert.deepEqual(catalogUnsupported.body.tables, [])
 assert.match(catalogUnsupported.body.message, /PostgreSQL connection does not support tables/)
 console.log(`catalog without the capability: ${catalogUnsupported.body.message}`)
+
+const catalogNoColumns = await callRoute(bareHost.routes, DB_COLUMNS_PATH, { database: 'app', table: 'events' })
+assert.deepEqual(catalogNoColumns.body.columns, [])
+assert.match(catalogNoColumns.body.message, /PostgreSQL connection does not support columns/)
+console.log(`catalog without the columns capability: ${catalogNoColumns.body.message}`)
 await bareHost.context.fiber.dispose()
 
 // The server's own schemas are left out, the way `db_databases` leaves them out.

@@ -1,0 +1,213 @@
+/* Browser catalog panel: the connection picker, the name filter, and the tree. */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  font-size: 12px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px 4px;
+}
+
+.picker {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+
+.select {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 6px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+}
+
+.search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 10px 6px;
+  padding: 0 8px;
+  height: 26px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.searchInput {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+  outline: none;
+}
+
+.tree {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 6px 12px;
+}
+
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* One tree row: the disclosure the row is opened by, plus its own actions. A
+   copy control cannot sit inside the disclosure button, so the two are siblings
+   and the row owns the hover. */
+.row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: 5px;
+}
+
+.row:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.disclosure {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 3px 6px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* Children of an opened node, indented under it. */
+.child {
+  padding-left: 14px;
+}
+
+/* The disclosure sits in its own box so a leaf row lines up with a parent. */
+.caret {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meta {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+}
+
+/* One column row: the name, then the type and the key/nullability it carries. */
+.leaf {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 6px 2px 38px;
+  border-radius: 5px;
+}
+
+.leaf:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.leafName {
+  color: var(--dsw-alias-label-primary);
+}
+
+.leafType {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.tag {
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 10px;
+}
+
+/* Icon-only actions kept beside the row they act on. */
+.iconButton {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+}
+
+.iconButton:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.copied {
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.notice {
+  margin: 8px 10px;
+  color: var(--dsw-alias-label-tertiary);
+  line-height: 1.6;
+}
+
+.failure {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 4px 10px;
+  padding: 6px 8px;
+  border: 0.5px solid var(--dsw-alias-state-error-primary);
+  border-radius: 6px;
+  color: var(--dsw-alias-state-error-primary);
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

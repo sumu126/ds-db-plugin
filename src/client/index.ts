@@ -15,12 +15,19 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 // Type-only: pulls the ctx.remote merge (the generated remote namespaces).
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
+// Type-only: pulls the right sidebar's Context merge (ctx.sidebarRightTabs) and
+// the tab seats this panel registers into.
+import type {} from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
 import type { DbPageFace, DbProbe } from './form.ts'
 import { DatabaseSettingsController, type DbCredentialsFace } from './form.ts'
 import { DatabaseSettingsPage } from './DatabaseSettingsPage.tsx'
+import type { BrowseReads, CatalogAnswer, DbBrowseFace } from './browse.ts'
+import { DatabaseBrowseController } from './browse.ts'
+import { DatabaseCatalogPanel, DatabaseCatalogTitle, DbPanelIcon } from './DatabaseCatalogPanel.tsx'
 import {
-  DB_DIALECTS_PATH, DB_SETTINGS_NAMESPACE, DB_TEST_PATH,
-  type ConnectionProfile, type DatabaseSettings, type DialectCatalog, type DialectDescriptor, type ProbeRequest,
+  DB_COLUMNS_PATH, DB_DATABASES_PATH, DB_DIALECTS_PATH, DB_SETTINGS_NAMESPACE, DB_TABLES_PATH, DB_TEST_PATH,
+  type ColumnNode, type ConnectionProfile, type DatabaseNode, type DatabaseSettings, type DialectCatalog,
+  type DialectDescriptor, type ProbeRequest, type TableNode,
 } from '../contract.ts'
 
 import { en, zh, type DbLocaleKey } from './locales.ts'
@@ -44,8 +51,14 @@ const NS = 'settings.db'
 
 /** Required services (cordis fiber inject). */
 export const inject = [
-  'slots', 'locale', 'remote', 'remote.credentials', 'settingsScope',
+  'slots', 'locale', 'remote', 'remote.credentials', 'settingsScope', 'sidebarRightTabs',
 ]
+
+/** Identity of the right-sidebar tab type this plugin contributes, and of its body. */
+const TAB_ID = 'dsh-ds-db'
+
+/** Kind the panel is opened by; also the guide card's own id. */
+const TAB_KIND = 'database'
 
 /**
  * Register the database settings page.
@@ -90,6 +103,41 @@ export function apply(ctx: ClientContext): void {
   // The rows live on the same client entry as the page: the slot is keyed by wire
   // tool name, so nothing else has to be told which tools this plugin registers.
   registerToolRows(ctx)
+
+  // The browser catalog: another view over the same settings namespace, reading
+  // the same three queries the listing tools run, on their own routes.
+  const browse = new DatabaseBrowseController(
+    ctx.settingsScope.bind<DatabaseSettings>({ namespace: DB_SETTINGS_NAMESPACE }),
+    browseReads(t),
+  )
+  ctx.effect(() => () => { browse.dispose() }, 'dsh-ds-db: browser catalog reads')
+
+  // A page type has one way in: the strip's add control opens the guide, and a
+  // card there is how a user reaches a type the session has never opened.
+  ctx.effect(() => ctx.sidebarRightTabs.register({
+    id: TAB_ID,
+    kind: TAB_KIND,
+    title: () => t('panelTitle'),
+    guide: [{
+      id: TAB_KIND,
+      order: 40,
+      title: () => t('panelTitle'),
+      description: () => t('guideEntryHint'),
+      icon: DbPanelIcon,
+    }],
+  }), 'dsh-ds-db: browser catalog type')
+
+  ctx.effect(() => ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({
+    name: 'sidebar.right.pane.tab', key: TAB_ID, locale: NS,
+    inject: (): DbBrowseFace => browse.face(),
+  }, DatabaseCatalogPanel)), 'dsh-ds-db: browser catalog body')
+
+  // Registered so the chip follows a language switch; without it the chip keeps
+  // the title the registry captured when the tab opened.
+  ctx.effect(() => ctx.slots.inject('sidebar.right.pane.tab.title', () => ctx.slots.register({
+    name: 'sidebar.right.pane.tab.title', key: TAB_ID, locale: NS,
+    inject: (): DbBrowseFace => browse.face(),
+  }, DatabaseCatalogTitle)), 'dsh-ds-db: browser catalog title')
 }
 
 /**
@@ -150,6 +198,63 @@ function completeDescriptor(entry: Partial<DialectDescriptor> & { name: string }
  * @returns the copy for the active locale.
  */
 type Translate = (key: DbLocaleKey, params?: Record<string, string>) => string
+
+/** The payload field carrying each catalog route's rows. */
+type CatalogField = 'databases' | 'tables' | 'columns'
+
+/**
+ * The browser catalog's three reads, each on this plugin's own authenticated route.
+ * @param t - the page's translate seat, for the copy a transport failure shows.
+ * @returns the reads the panel makes.
+ */
+function browseReads(t: Translate): BrowseReads {
+  return {
+    databases: (connection, signal) =>
+      readCatalog<DatabaseNode>(DB_DATABASES_PATH, { connection }, 'databases', signal, t),
+    tables: (connection, database, signal) =>
+      readCatalog<TableNode>(DB_TABLES_PATH, { connection, database }, 'tables', signal, t),
+    columns: (connection, database, table, signal) =>
+      readCatalog<ColumnNode>(DB_COLUMNS_PATH, { connection, database, table }, 'columns', signal, t),
+  }
+}
+
+/**
+ * Read one catalog listing over this plugin's own authenticated API route.
+ *
+ * A plain `fetch` for the reason the probe uses one: the remote surface comes
+ * from a generator this repository does not run, so the payloads are written out
+ * in `contract.ts`. A transport failure is an answer rather than a throw — the
+ * panel shows the sentence beside a retry either way.
+ * @param path - the route to read.
+ * @param query - the names the route addresses; an empty value is left out.
+ * @param field - the payload field carrying the rows.
+ * @param signal - cancellation, so a panel that closed stops waiting.
+ * @param t - the page's translate seat, for the copy this module owns.
+ * @returns the rows, or the sentence the panel renders in their place.
+ */
+async function readCatalog<T>(
+  path: string,
+  query: Record<string, string>,
+  field: CatalogField,
+  signal: AbortSignal,
+  t: Translate,
+): Promise<CatalogAnswer<T>> {
+  try {
+    const url = new URL(path, window.location.origin)
+    for (const [key, value] of Object.entries(query)) {
+      if (value.length > 0) url.searchParams.set(key, value)
+    }
+    const response = await fetch(url, { method: 'GET', signal })
+    if (!response.ok) return { rows: [], message: t('httpStatus', { status: String(response.status) }) }
+    const payload = await response.json() as Record<string, unknown> & { message?: string }
+    if (payload.message !== undefined) return { rows: [], message: payload.message }
+    // The route answers one field per level, named by the contract it is written
+    // against; an answer missing it is an empty list rather than a broken panel.
+    return { rows: (payload[field] ?? []) as T[] }
+  } catch (error: unknown) {
+    return { rows: [], message: error instanceof Error ? error.message : String(error) }
+  }
+}
 
 /**
  * Probe a connection over the plugin's own authenticated API route: an

@@ -26,8 +26,8 @@ import { CARD_BUDGET, type CardBudget } from './card-budget.ts'
 import { DatabaseAccess, SESSION_LIMIT } from './connection.ts'
 import { activeConnection, addressedConnection } from './connections.ts'
 import {
-  DB_DATABASES_PATH, DB_DIALECTS_PATH, DB_SETTINGS_NAMESPACE, DB_TABLES_PATH, DB_TEST_PATH, UNSET_PORT,
-  type ConnectionProfile, type DatabaseListing, type DatabaseSettings, type DialectCatalog,
+  DB_COLUMNS_PATH, DB_DATABASES_PATH, DB_DIALECTS_PATH, DB_SETTINGS_NAMESPACE, DB_TABLES_PATH, DB_TEST_PATH, UNSET_PORT,
+  type ColumnListing, type ConnectionProfile, type DatabaseListing, type DatabaseSettings, type DialectCatalog,
   type KnownDialectPackage, type ProbeRequest, type TableListing,
 } from './contract.ts'
 import { SHIPPED_DIALECT_PACKAGES } from './dialect-catalog.ts'
@@ -240,6 +240,25 @@ export function apply(ctx: Context, config: Config): void {
         )
       },
     }), `ds-db: GET ${DB_TABLES_PATH}`)
+
+    webCtx.effect(() => connection.fetch.register({
+      path: DB_COLUMNS_PATH,
+      methods: ['GET'],
+      requestBody: 'buffered',
+      fetch: async (request): Promise<Response> => {
+        const query = new URL(request.url).searchParams
+        return Response.json(
+          await listColumns(
+            { addressed, access },
+            query.get('connection') ?? undefined,
+            query.get('database') ?? '',
+            query.get('table') ?? '',
+            request.signal,
+          ),
+          { headers: { 'cache-control': 'no-store' } },
+        )
+      },
+    }), `ds-db: GET ${DB_COLUMNS_PATH}`)
   })
 }
 
@@ -446,11 +465,21 @@ async function listDatabases(
 }
 
 /**
- * List the tables and views of one database, for the browser catalog.
+ * The name one catalog request carries, or undefined when it carries none.
  *
- * A request that names no database is refused rather than resolved to the
- * connection's default: a panel always lists a database the user opened, and
- * silently listing another one would answer a question nobody asked.
+ * A request that names nothing is refused rather than resolved to a default: a
+ * panel always lists what the user opened, and silently listing something else
+ * would answer a question nobody asked.
+ * @param value - the query parameter as received.
+ * @returns the trimmed name.
+ */
+function requestedName(value: string): string | undefined {
+  const trimmed = value.trim()
+  return trimmed.length === 0 ? undefined : trimmed
+}
+
+/**
+ * List the tables and views of one database, for the browser catalog.
  * @param face - addressing and the session runner.
  * @param requested - the connection the request named, if any.
  * @param database - the database the request named.
@@ -463,8 +492,8 @@ async function listTables(
   database: string,
   signal?: AbortSignal,
 ): Promise<TableListing> {
-  const wanted = database.trim()
-  if (wanted.length === 0) return { database: '', tables: [], message: 'the request names no database' }
+  const wanted = requestedName(database)
+  if (wanted === undefined) return { database: '', tables: [], message: 'the request names no database' }
   try {
     const { profile: target, view } = face.addressed(requested)
     requireCapability(view, 'tables')
@@ -479,5 +508,47 @@ async function listTables(
     }
   } catch (error: unknown) {
     return { database: wanted, tables: [], message: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+/**
+ * List the columns of one table, for the browser catalog.
+ * @param face - addressing and the session runner.
+ * @param requested - the connection the request named, if any.
+ * @param database - the database the request named.
+ * @param table - the table the request named.
+ * @param signal - the request's cancellation.
+ * @returns the columns, or the refusal the panel renders in their place.
+ */
+async function listColumns(
+  face: CatalogReadFace,
+  requested: string | undefined,
+  database: string,
+  table: string,
+  signal?: AbortSignal,
+): Promise<ColumnListing> {
+  const wantedDatabase = requestedName(database)
+  const wantedTable = requestedName(table)
+  if (wantedDatabase === undefined || wantedTable === undefined) {
+    const missing = wantedDatabase === undefined ? 'database' : 'table'
+    return {
+      database: wantedDatabase ?? '', table: wantedTable ?? '', columns: [],
+      message: `the request names no ${missing}`,
+    }
+  }
+  try {
+    const { profile: target, view } = face.addressed(requested)
+    requireCapability(view, 'columns')
+    return {
+      connection: target.name,
+      database: wantedDatabase,
+      table: wantedTable,
+      columns: await face.access.run(target, view.columns(wantedDatabase, wantedTable), signal),
+    }
+  } catch (error: unknown) {
+    return {
+      database: wantedDatabase, table: wantedTable, columns: [],
+      message: error instanceof Error ? error.message : String(error),
+    }
   }
 }

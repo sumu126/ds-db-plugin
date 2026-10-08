@@ -25,7 +25,7 @@ import { load, resolve } from './css-stub.mjs'
 registerHooks({ resolve, load })
 
 const { apply, inject } = await import('../src/client/index.ts')
-const { DB_SETTINGS_NAMESPACE } = await import('../src/contract.ts')
+const { DB_COLUMNS_PATH, DB_DATABASES_PATH, DB_SETTINGS_NAMESPACE, DB_TABLES_PATH } = await import('../src/contract.ts')
 const { en: pageEn, zh: pageZh } = await import('../src/client/locales.ts')
 const { TOOL_NS } = await import('../src/client/tool-locales.ts')
 const { TOOL_ROW_KEYS } = await import('../src/client/card-model.ts')
@@ -38,6 +38,8 @@ let nextSeat = 0
 const dictionaries = new Map()
 /** Namespaces bound through the fake settings scope. */
 const bound = []
+/** Right-sidebar tab types registered, by the identity the shell dispatches on. */
+const tabTypes = new Map()
 
 /** The translate seat the locale service hands back, with `{name}` interpolation. */
 function translate(dict, key, params) {
@@ -56,7 +58,7 @@ function translate(dict, key, params) {
  * under `ctx.effect`, which is why unloading the fiber takes them with it even
  * though `apply` discards the returned disposer.
  */
-function makeContext() {
+function makeContext(settings = { connections: [], activeId: '' }) {
   const disposers = []
   /** Run one effect and keep its disposer, as the framework does. */
   const effect = (callback) => {
@@ -116,7 +118,7 @@ function makeContext() {
   const scope = {
     getSnapshot: () => ({
       status: 'ready',
-      value: { connections: [], activeId: '' },
+      value: settings,
       base: undefined,
       user: undefined,
       revision: 1,
@@ -127,6 +129,14 @@ function makeContext() {
     mutate: async () => {},
     set: async () => {},
     unset: async () => {},
+  }
+  // The tab-type registry the shell dispatches page types through: the guide is
+  // its entry point, so what a type contributes there is what a check can see.
+  const sidebarRightTabs = {
+    register(definition) {
+      tabTypes.set(definition.id, definition)
+      return () => { tabTypes.delete(definition.id) }
+    },
   }
   const remote = {
     credentials: {
@@ -139,6 +149,7 @@ function makeContext() {
     locale,
     slots,
     remote,
+    sidebarRightTabs,
     settingsScope: {
       bind(spec) {
         bound.push(spec.namespace)
@@ -156,7 +167,7 @@ function makeContext() {
 }
 
 // The declaration the framework would wait on before calling `apply`.
-assert.deepEqual(inject, ['slots', 'locale', 'remote', 'remote.credentials', 'settingsScope'], 'the client declares the services it reads')
+assert.deepEqual(inject, ['slots', 'locale', 'remote', 'remote.credentials', 'settingsScope', 'sidebarRightTabs'], 'the client declares the services it reads')
 
 const harness = makeContext()
 apply(harness.ctx)
@@ -193,7 +204,7 @@ assert.deepEqual(opening.dialog, { kind: 'closed' }, 'and no dialog open')
 for (const action of ['openNew', 'openEdit', 'closeDialog', 'chooseDialect', 'editField', 'editExtra', 'editPassword', 'testDraft', 'saveDialog', 'activate', 'testSaved', 'remove']) {
   assert.ok(typeof face[action] === 'function', `the inject face exposes the "${action}" action`)
 }
-assert.deepEqual(bound, [DB_SETTINGS_NAMESPACE], 'the page reads and writes the one settings namespace it owns')
+assert.deepEqual([...new Set(bound)], [DB_SETTINGS_NAMESPACE], 'the page and the panel read the one settings namespace they both own')
 
 // One seat per claimed tool key, keyed by the wire name the shell matches.
 const rows = allSeats().filter(seat => seat.options.name === 'tool.call.toolview')
@@ -204,11 +215,40 @@ for (const row of rows) {
 }
 console.log(`registered: settings.section + ${String(rows.length)} tool row(s) (${rows.map(row => String(row.options.key)).join(', ')})`)
 
+// The browser catalog: a right-sidebar page type, its guide card, and the two
+// seats the shell dispatches its body and its chip through.
+assert.deepEqual([...tabTypes.keys()], ['dsh-ds-db'], 'one tab type is registered, under the package identity the shell dispatches on')
+const tabType = tabTypes.get('dsh-ds-db')
+assert.equal(tabType.kind, 'database', 'opened by kind, since a catalog has no resource address')
+assert.equal(tabType.title(), pageZh.panelTitle, 'the chip label is translated at use, so a language switch reaches it')
+// The guide is the only way a page type is reached: the strip's add control
+// opens the guide, so a type without a card there cannot be opened at all.
+assert.deepEqual(tabType.guide.map(entry => entry.id), ['database'], 'the type contributes exactly one guide card')
+assert.equal(tabType.guide[0].title(), pageZh.panelTitle)
+assert.equal(tabType.guide[0].description(), pageZh.guideEntryHint)
+assert.equal(typeof tabType.guide[0].icon, 'function', 'the card carries its own glyph')
+
+const body = allSeats().find(seat => seat.options.name === 'sidebar.right.pane.tab')
+assert.ok(body, 'the panel claims a right-sidebar tab body')
+assert.equal(body.options.key, 'dsh-ds-db', 'keyed by the type identity, which is how the seat finds the body')
+assert.equal(body.options.locale, 'settings.db', 'the panel resolves its copy from this plugin namespace')
+const chip = allSeats().find(seat => seat.options.name === 'sidebar.right.pane.tab.title')
+assert.ok(chip, 'and a chip title seat, so an open chip follows a language switch')
+assert.equal(chip.options.key, 'dsh-ds-db')
+const browseFace = body.options.inject()
+assert.ok(browseFace.hooks?.dbBrowse, 'the inject face carries the panel source')
+assert.ok(typeof browseFace.hooks.dbBrowse.getSnapshot === 'function', 'the hooks member is a bare observable source, not a value')
+for (const action of ['chooseConnection', 'editFilter', 'refresh', 'toggleDatabase', 'toggleTable']) {
+  assert.ok(typeof browseFace[action] === 'function', `the inject face exposes the "${action}" action`)
+}
+console.log(`registered: sidebar.right.pane.tab + title for the "${String(tabType.kind)}" type, one guide card`)
+
 // The reload property: an unload takes every registration with it. A seat that
 // outlives its fiber is a duplicate contribution on the next load.
 await harness.dispose()
 assert.equal(seats.size, 0, 'disposing the fiber removes every slot registration')
 assert.equal(dictionaries.size, 0, 'and every dictionary it registered')
+assert.equal(tabTypes.size, 0, 'and the tab type the shell dispatches through')
 console.log('disposal: unloading the fiber removed every registration')
 
 // A second mount is a clean one: nothing from the first run survives into it.
@@ -218,5 +258,80 @@ assert.equal(allSeats().filter(seat => seat.options.name === 'tool.call.toolview
 await second.dispose()
 assert.equal(seats.size, 0, 'and unloads cleanly again')
 console.log('reload: a second mount registers once each and unloads clean')
+
+// ---- The panel's read path -----------------------------------------------
+
+/** The payloads the three catalog routes answer with, by path. */
+const ANSWERS = new Map([
+  [DB_DATABASES_PATH, { connection: 'A', databases: [{ name: 'app', charset: 'utf8mb4', collation: 'utf8mb4_bin' }] }],
+  [DB_TABLES_PATH, { connection: 'A', database: 'app', tables: [{ name: 'events', type: 'BASE TABLE', engine: 'InnoDB', estimatedRows: 12, comment: '' }] }],
+  [DB_COLUMNS_PATH, { connection: 'A', database: 'app', table: 'events', columns: [{ name: 'id', type: 'bigint', nullable: false, default: null, key: 'PRI', extra: 'auto_increment', comment: '' }] }],
+])
+
+/** Every route call this check caused, in order. */
+const calls = []
+
+// The panel reads through `fetch` on the page's own origin, so these stand in
+// for the two browser globals a Node check does not have — and answer with the
+// payloads the Host routes are written to send.
+globalThis.window = { location: { origin: 'http://127.0.0.1:3099' } }
+globalThis.fetch = async (url) => {
+  const address = new URL(String(url))
+  calls.push({ path: address.pathname, query: Object.fromEntries(address.searchParams) })
+  const body = ANSWERS.get(address.pathname)
+  return body === undefined ? new Response('not stubbed', { status: 404 }) : Response.json(body)
+}
+
+/** Let the catalog reads a gesture started land. */
+async function settle() {
+  for (let attempt = 0; attempt < 5; attempt++) await new Promise(resolve => setTimeout(resolve, 0))
+}
+
+/** One saved connection, complete enough that the settings page can resolve it. */
+const CONNECTION = {
+  id: 'a', name: 'A', dialect: 'mysql', extra: {},
+  host: '127.0.0.1', port: 3306, user: 'reader', database: '',
+  passwordEnv: 'A_PASSWORD', connectTimeoutMs: 10000, queryTimeoutMs: 30000, maxRows: 200,
+}
+
+const browsing = makeContext({ connections: [CONNECTION], activeId: 'a' })
+apply(browsing.ctx)
+await settle()
+
+const panel = allSeats().find(seat => seat.options.name === 'sidebar.right.pane.tab').options.inject()
+const snapshot = () => panel.hooks.dbBrowse.getSnapshot()
+
+assert.equal(snapshot().connection, 'a', 'the panel opens on the connection the tools address')
+assert.deepEqual(calls, [{ path: DB_DATABASES_PATH, query: { connection: 'A' } }], 'and reads it by name, on the databases route alone')
+assert.deepEqual(snapshot().databases, {
+  status: 'ready',
+  rows: [{ name: 'app', charset: 'utf8mb4', collation: 'utf8mb4_bin' }],
+})
+console.log('panel read: the databases of the connection in use')
+
+panel.toggleDatabase('app')
+await settle()
+assert.deepEqual(calls[1], { path: DB_TABLES_PATH, query: { connection: 'A', database: 'app' } })
+assert.deepEqual(snapshot().open.app.tables.rows.map(row => row.name), ['events'], 'a database reads its tables when it is opened')
+panel.toggleDatabase('app')
+assert.equal(snapshot().open.app.open, false, 'and collapsing keeps what it read')
+console.log('panel read: tables on first open, kept through a collapse')
+
+panel.toggleDatabase('app')
+panel.toggleTable('app', 'events')
+await settle()
+assert.deepEqual(calls[2], { path: DB_COLUMNS_PATH, query: { connection: 'A', database: 'app', table: 'events' } })
+assert.deepEqual(snapshot().open.app.openTables.events.columns.rows.map(row => row.name), ['id'])
+console.log('panel read: columns on first open')
+
+// Filtering is a view over what is already read: it issues no read of its own.
+const before = calls.length
+panel.editFilter('even')
+assert.equal(calls.length, before, 'filtering names calls no route')
+panel.editFilter('')
+console.log('panel read: the filter is client-side')
+
+await browsing.dispose()
+assert.equal(seats.size, 0, 'and the browsing mount unloads clean too')
 
 console.log('client check passed')

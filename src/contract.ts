@@ -27,6 +27,9 @@ export const DB_DATABASES_PATH = '/api/ds-db/databases'
 /** Exact Fetch route the browser catalog reads the tables of one database from. */
 export const DB_TABLES_PATH = '/api/ds-db/tables'
 
+/** Exact Fetch route the browser catalog reads the columns of one table from. */
+export const DB_COLUMNS_PATH = '/api/ds-db/columns'
+
 /** Credential reference a connection uses when its dialect declares none. */
 export const DEFAULT_PASSWORD_REF = 'DSH_DB_PASSWORD'
 
@@ -209,6 +212,38 @@ export interface TableListing {
   database: string
   /** Tables and views of that database, in server order. */
   tables: TableNode[]
+  /** Why there is no list, as one sentence the panel shows. */
+  message?: string
+}
+
+/** One column as the browser catalog lists it. */
+export interface ColumnNode {
+  /** Column name. */
+  name: string
+  /** Full column type, such as `varchar(64)` or `int unsigned`. */
+  type: string
+  /** Whether the column admits null. */
+  nullable: boolean
+  /** Default value as the server renders it, or null when it has none. */
+  default: string | null
+  /** Key role the server reports, such as `PRI` or `UNI`; empty when there is none. */
+  key: string
+  /** Server-side extras, such as `auto_increment`; empty when there are none. */
+  extra: string
+  /** Column comment, empty when it carries none. */
+  comment: string
+}
+
+/** What the browser catalog reads from the columns route. */
+export interface ColumnListing {
+  /** The connection the list came from, by name; absent when nothing could be listed. */
+  connection?: string
+  /** Database the table was read from, echoed as asked. */
+  database: string
+  /** Table the columns were read from, echoed as asked. */
+  table: string
+  /** Columns in definition order. */
+  columns: ColumnNode[]
   /** Why there is no list, as one sentence the panel shows. */
   message?: string
 }
