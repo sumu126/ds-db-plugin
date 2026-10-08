@@ -292,15 +292,17 @@ function freshId(): string {
  * The store holds one secret per reference, so a reference two connections share
  * is one password: seeding the dialect's own constant would make every
  * connection created here overwrite the others' passwords, while the page went
- * on reporting both as configured. The name is derived from the connection's
- * identity instead, so a new connection never lands on a name another one
- * carries — and it stays an identifier whatever the id holds.
+ * on reporting both as configured. The name carries the connection's whole
+ * identity instead — an identifier whatever the identity holds, and never a name
+ * another connection is already on.
  * @param base - the reference the dialect declares, else the plugin's own default.
  * @param id - the identity the draft is saved under.
  * @returns the reference to seed the dialog with.
  */
 function passwordRefFor(base: string, id: string): string {
-  return `${base}_${id.replace(/[^A-Za-z0-9]/gu, '').slice(0, 8)}`
+  // The identity whole rather than a prefix of it: the name is a store key, and
+  // a truncation is a collision waiting for the right pair of connections.
+  return `${base}_${id.replace(/[^A-Za-z0-9]/gu, '')}`
 }
 
 /**
