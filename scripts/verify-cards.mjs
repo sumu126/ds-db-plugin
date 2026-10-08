@@ -25,7 +25,7 @@ import { TOOL_ROW_KEYS, callText, dbCardModel, errorText, genericText } from '..
 import { CARD_BYTES } from '../src/card-budget.ts'
 import { DEFAULT_PASSWORD_REF, UNSET_PORT } from '../src/contract.ts'
 import { effectiveConnection } from '../src/connections.ts'
-import { dialogProfile, dialogValid, editDraftFor, endpointText, fieldInvalid, portText, portValue } from '../src/client/form.ts'
+import { dialogProfile, dialogValid, editDraftFor, endpointText, fieldInvalid, portText, portValue, sharedPasswordRef } from '../src/client/form.ts'
 
 const ctx = new Context()
 await ctx.plugin(SystemPrompt, {})
@@ -300,6 +300,25 @@ console.log(
   + ` edit form opens port=${JSON.stringify(opened.fields.port)} user=${JSON.stringify(opened.fields.user)}`
   + ` and saves back port=${String(dialogProfile(opened).port)} user=${JSON.stringify(dialogProfile(opened).user)}`,
 )
+
+// The credential store holds one secret per reference, so a draft carrying a
+// reference another connection is on is the same password rather than a second
+// one — the page has to say so, and must not say it about the connection being
+// edited. This is the pair the report came in with.
+const pair = [
+  profileOf({ id: 'a', name: 'MySQL', passwordEnv: 'DSH_MYSQL_PASSWORD' }),
+  profileOf({ id: 'b', name: 'dip2.0', passwordEnv: 'DSH_MYSQL_PASSWORDdip' }),
+]
+assert.equal(sharedPasswordRef(pair, editDraftFor(pair[1])), undefined, 'two connections on different references share nothing')
+const onOther = editDraftFor({ ...pair[1], passwordEnv: 'DSH_MYSQL_PASSWORD' })
+assert.equal(sharedPasswordRef(pair, onOther)?.name, 'MySQL', 'a draft on another connection\'s reference names that connection')
+assert.equal(sharedPasswordRef(pair, editDraftFor(pair[0])), undefined, 'the connection being edited does not count as sharing with itself')
+assert.equal(
+  sharedPasswordRef(pair, { ...onOther, fields: { ...onOther.fields, passwordEnv: '   ' } }),
+  undefined,
+  'a blank reference names no secret, so there is nothing to share',
+)
+console.log('password references: a draft on another connection\'s reference is reported, its own is not')
 
 await ctx.fiber.dispose()
 console.log('card check passed')

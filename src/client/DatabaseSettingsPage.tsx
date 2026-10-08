@@ -13,7 +13,7 @@ import clsx from 'clsx'
 import { Button, IconPlusOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ConnectionCard, DbDialog, DbFormField, DbPageFace, DbProbe } from './form.ts'
-import { FIELD_INVALID_KEY, dialogValid, editDraftFor, endpointText, fieldInvalid } from './form.ts'
+import { FIELD_INVALID_KEY, dialogValid, editDraftFor, endpointText, fieldInvalid, sharedPasswordRef } from './form.ts'
 import type { DialectCatalog } from '../contract.ts'
 import type { DbLocaleKey } from './locales.ts'
 import styles from './page.module.css'
@@ -126,9 +126,11 @@ function Card(props: {
 function DialogField(props: {
   field: DbFormField
   dialog: Extract<DbDialog, { kind: 'form' }>
-  t: (key: DbLocaleKey) => string
+  t: (key: DbLocaleKey, params?: Record<string, string>) => string
   disabled: boolean
   onEdit: (field: DbFormField, text: string) => void
+  /** Name of the connection already carrying this draft's reference, if any. */
+  shared: string | undefined
 }) {
   const { field, t } = props
   const text = props.dialog.fields[field]
@@ -149,6 +151,11 @@ function DialogField(props: {
         onChange={(event) => { props.onEdit(field, event.target.value) }}
       />
       <p className={invalid ? styles.invalid : styles.hint}>{invalid ? t(FIELD_INVALID_KEY[field]) : t(FIELD_HINT_KEY[field])}</p>
+      {/* The reference names a secret, so sharing one is not a second password:
+          it is the same one, replaced for both connections on the next save. */}
+      {field === 'passwordEnv' && props.shared !== undefined
+        ? <p className={styles.shared} role="status">{t('passwordEnvShared', { name: props.shared })}</p>
+        : null}
     </div>
   )
 }
@@ -210,6 +217,8 @@ function FormDialog(props: {
   dialog: Extract<DbDialog, { kind: 'form' }>
   saving: boolean
   t: (key: DbLocaleKey, params?: Record<string, string>) => string
+  /** Name of the connection already carrying this draft's reference, if any. */
+  sharedReference: string | undefined
   onEditField: (field: DbFormField, text: string) => void
   onEditExtra: (key: string, text: string) => void
   onEditPassword: (text: string) => void
@@ -223,7 +232,15 @@ function FormDialog(props: {
     <>
       <h3 className={styles.heading}>{t('connectionHeading')}</h3>
       {CONNECTION_FIELDS.map(field => (
-        <DialogField key={field} field={field} dialog={dialog} t={t} disabled={props.saving} onEdit={props.onEditField} />
+        <DialogField
+          key={field}
+          field={field}
+          dialog={dialog}
+          t={t}
+          disabled={props.saving}
+          shared={props.sharedReference}
+          onEdit={props.onEditField}
+        />
       ))}
       {dialog.configFields.map(field => (
         <div className={styles.field} key={field.key}>
@@ -266,7 +283,15 @@ function FormDialog(props: {
       </div>
       <h3 className={styles.heading}>{t('limitsHeading')}</h3>
       {LIMIT_FIELDS.map(field => (
-        <DialogField key={field} field={field} dialog={dialog} t={t} disabled={props.saving} onEdit={props.onEditField} />
+        <DialogField
+          key={field}
+          field={field}
+          dialog={dialog}
+          t={t}
+          disabled={props.saving}
+          shared={props.sharedReference}
+          onEdit={props.onEditField}
+        />
       ))}
       {dialog.probe.status === 'running'
         ? null
@@ -362,6 +387,7 @@ export function DatabaseSettingsPage(props: DatabaseSettingsPageProps) {
                           dialog={dialog}
                           saving={state.saving}
                           t={t}
+                          sharedReference={sharedPasswordRef(state.cards.map(card => card.profile), dialog)?.name}
                           onEditField={props.editField}
                           onEditExtra={props.editExtra}
                           onEditPassword={props.editPassword}

@@ -338,6 +338,27 @@ function blankFields(
 }
 
 /**
+ * The saved connection one dialog draft would share its password with.
+ *
+ * The credential store holds one secret per reference, so a draft carrying a
+ * reference another connection is already on is not a second password: it is the
+ * same one, and saving replaces it for both. The page says so rather than
+ * refusing, because two connections to one server with one account may share a
+ * password on purpose.
+ * @param connections - the saved connections, in document order.
+ * @param draft - the dialog's form state.
+ * @returns the connection already carrying the draft's reference, if any.
+ */
+export function sharedPasswordRef(
+  connections: readonly ConnectionProfile[],
+  draft: { id: string; fields: Record<DbFormField, string> },
+): ConnectionProfile | undefined {
+  const reference = draft.fields.passwordEnv.trim()
+  if (reference.length === 0) return undefined
+  return connections.find(profile => profile.id !== draft.id && profile.passwordEnv.trim() === reference)
+}
+
+/**
  * A draft dialog pre-filled from one saved profile, for the edit path.
  * @param profile - the saved connection to edit.
  * @param catalog - the loaded catalog, which names the dialect's own fields;

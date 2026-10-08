@@ -341,6 +341,17 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
+/* Reusing another connection's credential reference is not a validation
+   failure — the field is well formed and saving is allowed — but the save would
+   replace that connection's password too, so the sentence is drawn in the
+   error color rather than the hint's. */
+.shared {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dsw-alias-state-error-primary);
+}
+
 .failed {
   margin: 12px 0 0;
   font-size: 12px;
