@@ -30,6 +30,9 @@ export const DB_TABLES_PATH = '/api/ds-db/tables'
 /** Exact Fetch route the browser catalog reads the columns of one table from. */
 export const DB_COLUMNS_PATH = '/api/ds-db/columns'
 
+/** Exact Fetch route the browser query window runs one read-only statement on. */
+export const DB_QUERY_PATH = '/api/ds-db/query'
+
 /** Credential reference a connection uses when its dialect declares none. */
 export const DEFAULT_PASSWORD_REF = 'DSH_DB_PASSWORD'
 
@@ -257,4 +260,34 @@ export interface ProbeRequest {
   id?: string
   /** Unsaved draft to probe, as the dialog's form holds it. */
   profile?: ConnectionProfile
+}
+
+/**
+ * What the query window asks the server to run: one statement, against the
+ * connection the tools address unless it names another.
+ */
+export interface QueryRequest {
+  /** Saved connection to run against; absent means the one in use. */
+  connection?: string
+  /** The statement exactly as the reader wrote it, with or without a terminator. */
+  sql?: string
+}
+
+/** One cell of a result row, in the lossless JSON a tool result may carry. */
+export type QueryCell = string | number | boolean | null | QueryCell[] | { [key: string]: QueryCell }
+
+/** What one browser query answered: what a tool call would have received, or why none came. */
+export interface QueryPayload {
+  /** Column names, in result order. */
+  columns: string[]
+  /** Rows keyed by column name, cut at the connection's row cap. */
+  rows: Record<string, QueryCell>[]
+  /** Rows returned, which is `rows.length`. */
+  rowCount: number
+  /** Whether the result was cut at the connection's row cap. */
+  truncated: boolean
+  /** Statement wall time in milliseconds. */
+  elapsedMs: number
+  /** Why there are no rows, as one sentence the window shows. */
+  message?: string
 }

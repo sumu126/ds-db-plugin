@@ -18,7 +18,7 @@ import * as mysqlReadOnly from '../src/index.ts'
 import { dialectCatalog } from '../src/index.ts'
 import { DatabaseAccess } from '../src/connection.ts'
 import { CARD_BYTES } from '../src/card-budget.ts'
-import { DB_COLUMNS_PATH, DB_DATABASES_PATH, DB_TABLES_PATH } from '../src/contract.ts'
+import { DB_COLUMNS_PATH, DB_DATABASES_PATH, DB_QUERY_PATH, DB_TABLES_PATH } from '../src/contract.ts'
 import * as mysqlDialect from '../dialects/mysql/src/index.ts'
 import { MYSQL_DIALECT } from '../dialects/mysql/src/index.ts'
 
@@ -158,8 +158,9 @@ async function mountWithRoutes(config) {
       },
     },
   })
-  // Five routes: the probe, the dialect catalog, and the three catalog reads.
-  for (let attempt = 0; attempt < 100 && routes.size < 5; attempt++) {
+  // Six routes: the probe, the dialect catalog, the three catalog reads, and the
+  // query window's statement route.
+  for (let attempt = 0; attempt < 100 && routes.size < 6; attempt++) {
     await new Promise(resolve => setTimeout(resolve, 10))
   }
   return { context, routes }
@@ -170,14 +171,23 @@ async function mountWithRoutes(config) {
  * @param routes - the registered routes by path.
  * @param path - the route to call.
  * @param query - query parameters to send.
+ * @param body - a JSON body; supplying one makes the call a POST, the way the
+ * query window sends its statement.
  * @returns the response's status and parsed body.
  */
-async function callRoute(routes, path, query = {}) {
+async function callRoute(routes, path, query = {}, body) {
   const route = routes.get(path)
   assert.ok(route !== undefined, `${path} is registered`)
   const url = new URL(`http://127.0.0.1${path}`)
   for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value)
-  const response = await route.fetch(new Request(url, { method: 'GET' }))
+  const request = body === undefined
+    ? new Request(url, { method: 'GET' })
+    : new Request(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  const response = await route.fetch(request)
   return { status: response.status, body: await response.json() }
 }
 
@@ -292,6 +302,8 @@ function standInDialect(label, version, name = 'postgres') {
     if (sql.includes('pg_tables')) return [{ name: 'events', type: 'BASE TABLE' }]
     if (sql.includes('information_schema.columns')) return [{ name: 'id' }]
     if (sql.includes('version')) return [{ version }]
+    // Two rows, so a connection whose cap is one is shown to cut the result.
+    if (sql.includes('flood')) return [{ name: 'a' }, { name: 'b' }]
     return []
   }
   return {
@@ -833,6 +845,65 @@ assert.equal(catalogUnknown.status, 200, 'a refusal is a body, not a failed resp
 assert.deepEqual(catalogUnknown.body.databases, [])
 assert.match(catalogUnknown.body.message, /no saved connection is named "nope"; saved connections: A/)
 console.log(`catalog with an unknown connection: ${catalogUnknown.body.message}`)
+
+// ---- The query window's statement route ----------------------------------
+
+// The window runs the statement the model would: the same guard, the same row
+// bound, and the same session runner, so the body is what a `db_query` call
+// would have returned. A statement that ran carries the five result fields and
+// no message; `message` is what the window renders in their place.
+const ranQuery = await callRoute(catalogHost.routes, DB_QUERY_PATH, {}, { sql: 'SELECT 1' })
+assert.equal(ranQuery.status, 200, 'the window answers the page')
+assert.deepEqual(ranQuery.body.columns, [])
+assert.deepEqual(ranQuery.body.rows, [])
+assert.equal(ranQuery.body.rowCount, 0)
+assert.equal(ranQuery.body.truncated, false)
+assert.equal(typeof ranQuery.body.elapsedMs, 'number', 'the window reports how long the server took')
+assert.equal(ranQuery.body.message, undefined, 'a statement that ran carries no message')
+// The bound the window applied is the connection's, spelled in the dialect's own
+// syntax: the window is not a second, unbounded path onto the server.
+assert.match(seen.sql, /FETCH FIRST 201 ROWS ONLY/, 'the window bounded the statement')
+console.log(`query window: ${JSON.stringify(ranQuery.body)}`)
+
+// A statement the guard refuses is refused here in the same words, as a value
+// the window renders rather than a failed request.
+const wroteQuery = await callRoute(catalogHost.routes, DB_QUERY_PATH, {}, { sql: 'DROP TABLE users' })
+assert.equal(wroteQuery.status, 200, 'a refusal is a body, not a failed response')
+assert.deepEqual(wroteQuery.body.rows, [])
+assert.equal(wroteQuery.body.rowCount, 0)
+assert.match(wroteQuery.body.message, /read-only/)
+console.log(`query window refusal: ${wroteQuery.body.message}`)
+
+const compoundQuery = await callRoute(catalogHost.routes, DB_QUERY_PATH, {}, { sql: 'SELECT 1; SELECT 2' })
+assert.deepEqual(compoundQuery.body.rows, [])
+assert.match(compoundQuery.body.message, /exactly one statement/)
+console.log(`query window compound refusal: ${compoundQuery.body.message}`)
+
+const emptyQuery = await callRoute(catalogHost.routes, DB_QUERY_PATH, {}, {})
+assert.deepEqual(emptyQuery.body.rows, [])
+assert.match(emptyQuery.body.message, /one non-empty statement/)
+console.log(`query window empty refusal: ${emptyQuery.body.message}`)
+
+// Naming a connection that is not saved is refused before the statement is
+// judged, with the same sentence a tool call gets.
+const unknownQuery = await callRoute(catalogHost.routes, DB_QUERY_PATH, {}, { sql: 'SELECT 1', connection: 'nope' })
+assert.deepEqual(unknownQuery.body.rows, [])
+assert.match(unknownQuery.body.message, /no saved connection is named "nope"; saved connections: A/)
+console.log(`query window unknown connection: ${unknownQuery.body.message}`)
+
+// A result past the connection's cap is cut and says so, the way a `db_query`
+// card does: the window never holds an unbounded answer.
+const cappedHost = await mountWithRoutes({
+  connections: [{ ...CATALOG_CONNECTION, maxRows: 1 }],
+  activeId: 'a',
+})
+cappedHost.context.databaseDialects.register(standInDialect('PostgreSQL', '16.3'))
+const cappedQuery = await callRoute(cappedHost.routes, DB_QUERY_PATH, {}, { sql: 'SELECT name FROM flood' })
+assert.equal(cappedQuery.body.rowCount, 1, 'the window cuts rows at the connection cap')
+assert.equal(cappedQuery.body.rows.length, 1)
+assert.equal(cappedQuery.body.truncated, true, 'the window says the result was cut')
+console.log('query window: a result past the cap was cut and reported')
+await cappedHost.context.fiber.dispose()
 
 await catalogHost.context.fiber.dispose()
 

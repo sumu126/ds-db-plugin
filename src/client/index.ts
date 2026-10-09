@@ -24,10 +24,13 @@ import { DatabaseSettingsPage } from './DatabaseSettingsPage.tsx'
 import type { BrowseReads, CatalogAnswer, DbBrowseFace } from './browse.ts'
 import { DatabaseBrowseController } from './browse.ts'
 import { DatabaseCatalogPanel, DatabaseCatalogTitle, DbPanelIcon } from './DatabaseCatalogPanel.tsx'
+import type { DbQueryFace, QueryAnswer } from './query.ts'
+import { DatabaseQueryController } from './query.ts'
+import { DatabaseQueryPanel, DatabaseQueryTitle, SqlPanelIcon } from './DatabaseQueryPanel.tsx'
 import {
-  DB_COLUMNS_PATH, DB_DATABASES_PATH, DB_DIALECTS_PATH, DB_SETTINGS_NAMESPACE, DB_TABLES_PATH, DB_TEST_PATH,
+  DB_COLUMNS_PATH, DB_DATABASES_PATH, DB_DIALECTS_PATH, DB_QUERY_PATH, DB_SETTINGS_NAMESPACE, DB_TABLES_PATH, DB_TEST_PATH,
   type ColumnNode, type ConnectionProfile, type DatabaseNode, type DatabaseSettings, type DialectCatalog,
-  type DialectDescriptor, type ProbeRequest, type TableNode,
+  type DialectDescriptor, type ProbeRequest, type QueryPayload, type TableNode,
 } from '../contract.ts'
 
 import { en, zh, type DbLocaleKey } from './locales.ts'
@@ -59,6 +62,10 @@ const TAB_ID = 'dsh-ds-db'
 
 /** Kind the panel is opened by; also the guide card's own id. */
 const TAB_KIND = 'database'
+
+/** Identity and kind of the query window, the second page type this plugin contributes. */
+const QUERY_TAB_ID = 'dsh-ds-db-query'
+const QUERY_TAB_KIND = 'query'
 
 /**
  * Register the database settings page.
@@ -138,6 +145,39 @@ export function apply(ctx: ClientContext): void {
     name: 'sidebar.right.pane.tab.title', key: TAB_ID, locale: NS,
     inject: (): DbBrowseFace => browse.face(),
   }, DatabaseCatalogTitle)), 'dsh-ds-db: browser catalog title')
+
+  // The query window: the same settings namespace, one statement route, and a
+  // second page type beside the catalog. Its judgement and row bound are the
+  // `db_query` tool's, so the window is a second pair of hands on the one
+  // read-only path rather than a second path onto the server.
+  const query = new DatabaseQueryController(
+    ctx.settingsScope.bind<DatabaseSettings>({ namespace: DB_SETTINGS_NAMESPACE }),
+    (connection, sql, signal) => runStatement(connection, sql, signal, t),
+  )
+  ctx.effect(() => () => { query.dispose() }, 'dsh-ds-db: query window run')
+
+  ctx.effect(() => ctx.sidebarRightTabs.register({
+    id: QUERY_TAB_ID,
+    kind: QUERY_TAB_KIND,
+    title: () => t('queryTitle'),
+    guide: [{
+      id: QUERY_TAB_KIND,
+      order: 41,
+      title: () => t('queryTitle'),
+      description: () => t('queryGuideHint'),
+      icon: SqlPanelIcon,
+    }],
+  }), 'dsh-ds-db: query window type')
+
+  ctx.effect(() => ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({
+    name: 'sidebar.right.pane.tab', key: QUERY_TAB_ID, locale: NS,
+    inject: (): DbQueryFace => query.face(),
+  }, DatabaseQueryPanel)), 'dsh-ds-db: query window body')
+
+  ctx.effect(() => ctx.slots.inject('sidebar.right.pane.tab.title', () => ctx.slots.register({
+    name: 'sidebar.right.pane.tab.title', key: QUERY_TAB_ID, locale: NS,
+    inject: (): DbQueryFace => query.face(),
+  }, DatabaseQueryTitle)), 'dsh-ds-db: query window title')
 }
 
 /**
@@ -290,4 +330,56 @@ async function probeConnection(request: ProbeRequest, t: Translate): Promise<DbP
   } catch (error: unknown) {
     return { status: 'failed', message: error instanceof Error ? error.message : String(error) }
   }
+}
+
+/**
+ * Run one statement over this plugin's own authenticated query route.
+ *
+ * A plain `fetch` for the reason the probe and the catalog reads use one, and
+ * the payload is the one `contract.ts` writes out. A refusal the Host wrote is
+ * a value, not a failure: the window renders the sentence in place of the rows
+ * either way. A cancellation is answered here too, and the run that asked for it
+ * has already let go of this answer.
+ * @param connection - the connection to run against, by name.
+ * @param sql - the statement exactly as the reader wrote it.
+ * @param signal - cancellation, so a window that closed stops waiting.
+ * @param t - the page's translate seat, for the copy this module owns.
+ * @returns the rows, or the sentence the window renders in their place.
+ */
+async function runStatement(
+  connection: string,
+  sql: string,
+  signal: AbortSignal,
+  t: Translate,
+): Promise<QueryAnswer> {
+  try {
+    const response = await fetch(DB_QUERY_PATH, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ connection, sql }),
+      signal,
+    })
+    if (!response.ok) return emptyAnswer(t('httpStatus', { status: String(response.status) }))
+    const payload = await response.json() as Partial<QueryPayload>
+    if (typeof payload.message === 'string') return emptyAnswer(payload.message)
+    const rows = payload.rows ?? []
+    return {
+      columns: payload.columns ?? [],
+      rows,
+      rowCount: typeof payload.rowCount === 'number' ? payload.rowCount : rows.length,
+      truncated: payload.truncated === true,
+      elapsedMs: typeof payload.elapsedMs === 'number' ? payload.elapsedMs : 0,
+    }
+  } catch (error: unknown) {
+    return emptyAnswer(error instanceof Error ? error.message : String(error))
+  }
+}
+
+/**
+ * One answer carrying no rows, and the sentence to show in their place.
+ * @param message - why there are no rows.
+ * @returns the answer the window renders as a refusal.
+ */
+function emptyAnswer(message: string): QueryAnswer {
+  return { columns: [], rows: [], rowCount: 0, truncated: false, elapsedMs: 0, message }
 }

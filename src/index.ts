@@ -26,13 +26,14 @@ import { CARD_BUDGET, type CardBudget } from './card-budget.ts'
 import { DatabaseAccess, SESSION_LIMIT } from './connection.ts'
 import { activeConnection, addressedConnection } from './connections.ts'
 import {
-  DB_COLUMNS_PATH, DB_DATABASES_PATH, DB_DIALECTS_PATH, DB_SETTINGS_NAMESPACE, DB_TABLES_PATH, DB_TEST_PATH, UNSET_PORT,
+  DB_COLUMNS_PATH, DB_DATABASES_PATH, DB_DIALECTS_PATH, DB_QUERY_PATH, DB_SETTINGS_NAMESPACE, DB_TABLES_PATH, DB_TEST_PATH, UNSET_PORT,
   type ColumnListing, type ConnectionProfile, type DatabaseListing, type DatabaseSettings, type DialectCatalog,
-  type KnownDialectPackage, type ProbeRequest, type TableListing,
+  type KnownDialectPackage, type ProbeRequest, type QueryPayload, type QueryRequest, type TableListing,
 } from './contract.ts'
 import { SHIPPED_DIALECT_PACKAGES } from './dialect-catalog.ts'
 import { DatabaseDialectRegistry, dialectFacts, resolveDialect, type DatabaseConnection, type DatabaseDialect } from './dialect.ts'
 import { compositionEntry, Config, DatabaseSettingsSchema, DIALECT_WAIT_MS, SAMPLE_ROWS } from './settings.ts'
+import { assertReadOnlyStatement } from './sql-guard.ts'
 import { applyDatabaseTools, requireCapability } from './tools.ts'
 
 export type { ConnectionProfile, DatabaseSettings } from './contract.ts'
@@ -259,6 +260,20 @@ export function apply(ctx: Context, config: Config): void {
         )
       },
     }), `ds-db: GET ${DB_COLUMNS_PATH}`)
+
+    // The query window runs the same statement the model would: the judgement,
+    // the row bound, and the session runner are `db_query`'s, so what the window
+    // shows is what a tool call would have returned. Nothing about the request
+    // arriving from the browser exempts it from any of those.
+    webCtx.effect(() => connection.fetch.register({
+      path: DB_QUERY_PATH,
+      methods: ['POST'],
+      requestBody: 'buffered',
+      fetch: async (request): Promise<Response> => Response.json(
+        await runQuery({ addressed, access }, request),
+        { headers: { 'cache-control': 'no-store' } },
+      ),
+    }), `ds-db: POST ${DB_QUERY_PATH}`)
   })
 }
 
@@ -423,11 +438,11 @@ async function probeProfile(
   }
 }
 
-/** What one browser catalog read addresses, and how it runs. */
-interface CatalogReadFace {
+/** What one read the browser asks for addresses, and how it runs. */
+interface BrowserReadFace {
   /** The connection a request named, resolved together with its dialect. */
   addressed: (requested: string | undefined) => { profile: ConnectionProfile, view: DatabaseDialect }
-  /** The session runner, so a catalog read is bounded exactly as a tool call is. */
+  /** The session runner, so a browser read is bounded exactly as a tool call is. */
   access: DatabaseAccess
 }
 
@@ -445,7 +460,7 @@ interface CatalogReadFace {
  * @returns the databases, or the refusal the panel renders in their place.
  */
 async function listDatabases(
-  face: CatalogReadFace,
+  face: BrowserReadFace,
   requested: string | undefined,
   signal?: AbortSignal,
 ): Promise<DatabaseListing> {
@@ -461,6 +476,46 @@ async function listDatabases(
     }
   } catch (error: unknown) {
     return { databases: [], message: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+/**
+ * Run one read-only statement for the browser query window.
+ *
+ * The judgement, the row bound, and the session runner are the `db_query` tool's,
+ * so the window is a second pair of hands on one read-only path rather than a
+ * second path: a statement refused to the model is refused here in the same
+ * words, and the rows are the rows the model would have received. Nothing about
+ * the request coming from the browser exempts it from any of that.
+ * @param face - addressing and the session runner.
+ * @param request - the window's request, carrying the statement and the connection.
+ * @returns the rows, or the refusal the window renders in their place.
+ */
+async function runQuery(face: BrowserReadFace, request: Request): Promise<QueryPayload> {
+  try {
+    const body = await request.json().catch(() => ({})) as QueryRequest
+    const { profile: target, view } = face.addressed(body.connection)
+    // An empty statement is the guard's to refuse, so that refusal keeps one
+    // wording across both faces.
+    const statement = assertReadOnlyStatement(body.sql ?? '', view.rules)
+    // The row cap belongs to the connection that answers the request.
+    const outcome = await face.access.query(target, view.applyRowLimit(statement, target.maxRows), [], request.signal)
+    return {
+      columns: outcome.columns,
+      rows: outcome.rows,
+      rowCount: outcome.rows.length,
+      truncated: outcome.truncated,
+      elapsedMs: outcome.elapsedMs,
+    }
+  } catch (error: unknown) {
+    return {
+      columns: [],
+      rows: [],
+      rowCount: 0,
+      truncated: false,
+      elapsedMs: 0,
+      message: error instanceof Error ? error.message : String(error),
+    }
   }
 }
 
@@ -487,7 +542,7 @@ function requestedName(value: string): string | undefined {
  * @returns the tables, or the refusal the panel renders in their place.
  */
 async function listTables(
-  face: CatalogReadFace,
+  face: BrowserReadFace,
   requested: string | undefined,
   database: string,
   signal?: AbortSignal,
@@ -521,7 +576,7 @@ async function listTables(
  * @returns the columns, or the refusal the panel renders in their place.
  */
 async function listColumns(
-  face: CatalogReadFace,
+  face: BrowserReadFace,
   requested: string | undefined,
   database: string,
   table: string,

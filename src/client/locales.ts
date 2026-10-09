@@ -88,6 +88,17 @@ export const zh = {
   rows: '约 {count} 行',
   rowsUnknown: '行数未知',
   notNull: '非空',
+  queryTitle: 'SQL 查询',
+  queryGuideHint: '在某个连接上运行一条只读 SQL，并查看结果。',
+  queryConnection: '要查询的连接',
+  querySql: 'SQL 语句',
+  queryPlaceholder: 'SELECT * FROM 表名 LIMIT 100',
+  queryRun: '运行',
+  queryRunning: '运行中…',
+  queryHint: '只读：只接受一条 SELECT / SHOW / DESCRIBE / EXPLAIN / TABLE / VALUES 语句，结果按连接的行数上限截断。按 Ctrl/Cmd + Enter 运行。',
+  queryNoRows: '这条语句没有返回行。',
+  querySummary: '{rows} 行 · {ms} 毫秒',
+  queryTruncated: '已按行数上限截断',
 } as const
 
 /** English dictionary, keyed by the Chinese one. */
@@ -172,6 +183,17 @@ export const en: Record<keyof typeof zh, string> = {
   rows: '~{count} rows',
   rowsUnknown: 'rows unknown',
   notNull: 'not null',
+  queryTitle: 'SQL query',
+  queryGuideHint: 'Run one read-only statement against a connection and read the rows.',
+  queryConnection: 'Connection to query',
+  querySql: 'SQL statement',
+  queryPlaceholder: 'SELECT * FROM table_name LIMIT 100',
+  queryRun: 'Run',
+  queryRunning: 'Running…',
+  queryHint: 'Read-only: one SELECT, SHOW, DESCRIBE, EXPLAIN, TABLE, or VALUES statement; the result is cut at the connection\'s row cap. Press Ctrl/Cmd + Enter to run.',
+  queryNoRows: 'The statement returned no rows.',
+  querySummary: '{rows} rows · {ms} ms',
+  queryTruncated: 'cut at the row cap',
 }
 
 /** One dictionary key of the database settings page. */
