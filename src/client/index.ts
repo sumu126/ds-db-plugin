@@ -21,12 +21,11 @@ import type {} from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
 import type { DbPageFace, DbProbe } from './form.ts'
 import { DatabaseSettingsController, type DbCredentialsFace } from './form.ts'
 import { DatabaseSettingsPage } from './DatabaseSettingsPage.tsx'
-import type { BrowseReads, CatalogAnswer, DbBrowseFace } from './browse.ts'
+import type { BrowseReads, CatalogAnswer } from './browse.ts'
 import { DatabaseBrowseController } from './browse.ts'
-import { DatabaseCatalogPanel, DatabaseCatalogTitle, DbPanelIcon } from './DatabaseCatalogPanel.tsx'
-import type { DbQueryFace, QueryAnswer } from './query.ts'
+import type { QueryAnswer } from './query.ts'
 import { DatabaseQueryController } from './query.ts'
-import { DatabaseQueryPanel, DatabaseQueryTitle, SqlPanelIcon } from './DatabaseQueryPanel.tsx'
+import { DatabaseWorkbenchPanel, DatabaseWorkbenchTitle, DbPanelIcon, type DbWorkbenchFace } from './DatabaseWorkbenchPanel.tsx'
 import {
   DB_COLUMNS_PATH, DB_DATABASES_PATH, DB_DIALECTS_PATH, DB_QUERY_PATH, DB_SETTINGS_NAMESPACE, DB_TABLES_PATH, DB_TEST_PATH,
   type ColumnNode, type ConnectionProfile, type DatabaseNode, type DatabaseSettings, type DialectCatalog,
@@ -60,12 +59,8 @@ export const inject = [
 /** Identity of the right-sidebar tab type this plugin contributes, and of its body. */
 const TAB_ID = 'dsh-ds-db'
 
-/** Kind the panel is opened by; also the guide card's own id. */
+/** Kind the workbench is opened by; also the guide card's own id. */
 const TAB_KIND = 'database'
-
-/** Identity and kind of the query window, the second page type this plugin contributes. */
-const QUERY_TAB_ID = 'dsh-ds-db-query'
-const QUERY_TAB_KIND = 'query'
 
 /**
  * Register the database settings page.
@@ -119,8 +114,18 @@ export function apply(ctx: ClientContext): void {
   )
   ctx.effect(() => () => { browse.dispose() }, 'dsh-ds-db: browser catalog reads')
 
-  // A page type has one way in: the strip's add control opens the guide, and a
-  // card there is how a user reaches a type the session has never opened.
+  // The statement route the workbench's editor runs on. Its judgement and row
+  // bound are the `db_query` tool's, so the editor is a second pair of hands on
+  // the one read-only path rather than a second path onto the server.
+  const query = new DatabaseQueryController(
+    ctx.settingsScope.bind<DatabaseSettings>({ namespace: DB_SETTINGS_NAMESPACE }),
+    (connection, sql, signal) => runStatement(connection, sql, signal, t),
+  )
+  ctx.effect(() => () => { query.dispose() }, 'dsh-ds-db: workbench statement run')
+
+  // One page type, one card. The right sidebar shows one tab body at a time, so
+  // a tree and an editor in two types could never be seen together — the
+  // workbench is one body holding both halves.
   ctx.effect(() => ctx.sidebarRightTabs.register({
     id: TAB_ID,
     kind: TAB_KIND,
@@ -132,52 +137,30 @@ export function apply(ctx: ClientContext): void {
       description: () => t('guideEntryHint'),
       icon: DbPanelIcon,
     }],
-  }), 'dsh-ds-db: browser catalog type')
+  }), 'dsh-ds-db: workbench type')
+
+  /**
+   * The workbench's inject face: both halves' snapshots and both halves'
+   * gestures. The picker inside calls both, so the tree and the editor are
+   * always addressed at one connection.
+   */
+  const face = (): DbWorkbenchFace => ({
+    hooks: { dbBrowse: browse.snapshot, dbQuery: query.snapshot },
+    browse: browse.face(),
+    work: query.face(),
+  })
 
   ctx.effect(() => ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({
     name: 'sidebar.right.pane.tab', key: TAB_ID, locale: NS,
-    inject: (): DbBrowseFace => browse.face(),
-  }, DatabaseCatalogPanel)), 'dsh-ds-db: browser catalog body')
+    inject: face,
+  }, DatabaseWorkbenchPanel)), 'dsh-ds-db: workbench body')
 
   // Registered so the chip follows a language switch; without it the chip keeps
   // the title the registry captured when the tab opened.
   ctx.effect(() => ctx.slots.inject('sidebar.right.pane.tab.title', () => ctx.slots.register({
     name: 'sidebar.right.pane.tab.title', key: TAB_ID, locale: NS,
-    inject: (): DbBrowseFace => browse.face(),
-  }, DatabaseCatalogTitle)), 'dsh-ds-db: browser catalog title')
-
-  // The query window: the same settings namespace, one statement route, and a
-  // second page type beside the catalog. Its judgement and row bound are the
-  // `db_query` tool's, so the window is a second pair of hands on the one
-  // read-only path rather than a second path onto the server.
-  const query = new DatabaseQueryController(
-    ctx.settingsScope.bind<DatabaseSettings>({ namespace: DB_SETTINGS_NAMESPACE }),
-    (connection, sql, signal) => runStatement(connection, sql, signal, t),
-  )
-  ctx.effect(() => () => { query.dispose() }, 'dsh-ds-db: query window run')
-
-  ctx.effect(() => ctx.sidebarRightTabs.register({
-    id: QUERY_TAB_ID,
-    kind: QUERY_TAB_KIND,
-    title: () => t('queryTitle'),
-    guide: [{
-      id: QUERY_TAB_KIND,
-      order: 41,
-      title: () => t('queryTitle'),
-      description: () => t('queryGuideHint'),
-      icon: SqlPanelIcon,
-    }],
-  }), 'dsh-ds-db: query window type')
-
-  ctx.effect(() => ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({
-    name: 'sidebar.right.pane.tab', key: QUERY_TAB_ID, locale: NS,
-    inject: (): DbQueryFace => query.face(),
-  }, DatabaseQueryPanel)), 'dsh-ds-db: query window body')
-
-  ctx.effect(() => ctx.slots.inject('sidebar.right.pane.tab.title', () => ctx.slots.register({
-    name: 'sidebar.right.pane.tab.title', key: QUERY_TAB_ID, locale: NS,
-    inject: (): DbQueryFace => query.face(),
-  }, DatabaseQueryTitle)), 'dsh-ds-db: query window title')
+    inject: face,
+  }, DatabaseWorkbenchTitle)), 'dsh-ds-db: workbench title')
 }
 
 /**
@@ -285,7 +268,7 @@ async function readCatalog<T>(
       if (value.length > 0) url.searchParams.set(key, value)
     }
     const response = await fetch(url, { method: 'GET', signal })
-    if (!response.ok) return { rows: [], message: t('httpStatus', { status: String(response.status) }) }
+    if (!response.ok) return { rows: [], message: statusText(response.status, t) }
     const payload = await response.json() as Record<string, unknown> & { message?: string }
     if (payload.message !== undefined) return { rows: [], message: payload.message }
     // The route answers one field per level, named by the contract it is written
@@ -317,7 +300,7 @@ async function probeConnection(request: ProbeRequest, t: Translate): Promise<DbP
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     })
-    if (!response.ok) return { status: 'failed', message: t('httpStatus', { status: String(response.status) }) }
+    if (!response.ok) return { status: 'failed', message: statusText(response.status, t) }
     const payload = await response.json() as { ok?: unknown; version?: unknown; latencyMs?: unknown; message?: unknown }
     if (payload.ok === true && typeof payload.version === 'string') {
       return {
@@ -359,7 +342,7 @@ async function runStatement(
       body: JSON.stringify({ connection, sql }),
       signal,
     })
-    if (!response.ok) return emptyAnswer(t('httpStatus', { status: String(response.status) }))
+    if (!response.ok) return emptyAnswer(statusText(response.status, t))
     const payload = await response.json() as Partial<QueryPayload>
     if (typeof payload.message === 'string') return emptyAnswer(payload.message)
     const rows = payload.rows ?? []
@@ -373,6 +356,23 @@ async function runStatement(
   } catch (error: unknown) {
     return emptyAnswer(error instanceof Error ? error.message : String(error))
   }
+}
+
+/**
+ * One response's status, as the sentence a surface shows in place of a result.
+ *
+ * A 404 on one of this plugin's own routes is not a mystery worth echoing as a
+ * bare status: these routes are registered by the host half, which the process
+ * loads at boot, while the browser half is served from disk and hot-swapped into
+ * open pages. A page that refreshed after an update therefore can be newer than
+ * the process behind it, and what the user has to do is restart dsh. Every other
+ * status stays a status.
+ * @param status - the response's status code.
+ * @param t - the page's translate seat.
+ * @returns the sentence to show.
+ */
+function statusText(status: number, t: Translate): string {
+  return status === 404 ? t('hostStale') : t('httpStatus', { status: String(status) })
 }
 
 /**

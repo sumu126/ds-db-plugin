@@ -180,6 +180,15 @@ export interface DatabaseNode {
 export interface TableNode {
   /** Table or view name. */
   name: string
+  /**
+   * The same name as a statement must spell it: quoted in the dialect's own
+   * way and qualified by its database.
+   *
+   * Generated here rather than in the page because quoting is the dialect's
+   * affair — a name that needs quotes, or one that contains the quote character
+   * itself, is only spelled correctly by the dialect that owns the syntax.
+   */
+  sqlName: string
   /** How the server classifies it: a stored table or a view. */
   type: string
   /** Storage engine, or null where the server has none. */
@@ -223,6 +232,8 @@ export interface TableListing {
 export interface ColumnNode {
   /** Column name. */
   name: string
+  /** The same name as a statement must spell it, quoted in the dialect's own way. */
+  sqlName: string
   /** Full column type, such as `varchar(64)` or `int unsigned`. */
   type: string
   /** Whether the column admits null. */

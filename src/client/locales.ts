@@ -71,10 +71,11 @@ export const zh = {
   testFailed: '连接失败：{message}',
   httpStatus: 'HTTP {status}',
   noMessage: '主机没有说明原因',
-  panelTitle: '数据库连接',
-  guideEntryHint: '浏览某个连接里的库、表和列。',
-  browseConnection: '要浏览的连接',
+  panelTitle: '数据库',
+  guideEntryHint: '浏览某个连接里的库、表和列，并在旁边直接运行只读 SQL。',
+  currentConnection: '当前连接',
   browseEmpty: '还没有保存的连接。先在「设置 → 数据库管理」里添加一条。',
+  toggleTree: '浏览树',
   filter: '过滤名称',
   refresh: '刷新',
   retry: '重试',
@@ -85,12 +86,14 @@ export const zh = {
   loadingColumns: '正在读取列…',
   noColumns: '这张表没有可见的列。',
   copyName: '复制 {name}',
+  expandNode: '展开 {name}',
+  collapseNode: '折叠 {name}',
+  readTable: '查询 {name} 的数据',
+  insertName: '把 {name} 插入编辑器',
+  resizeTree: '拖动调整浏览树的宽度',
   rows: '约 {count} 行',
   rowsUnknown: '行数未知',
   notNull: '非空',
-  queryTitle: 'SQL 查询',
-  queryGuideHint: '在某个连接上运行一条只读 SQL，并查看结果。',
-  queryConnection: '要查询的连接',
   querySql: 'SQL 语句',
   queryPlaceholder: 'SELECT * FROM 表名 LIMIT 100',
   queryRun: '运行',
@@ -99,6 +102,7 @@ export const zh = {
   queryNoRows: '这条语句没有返回行。',
   querySummary: '{rows} 行 · {ms} 毫秒',
   queryTruncated: '已按行数上限截断',
+  hostStale: '宿主半边没有这条路由：dsh 多半还在跑更新前的旧版本，重启 dsh 后再试。',
 } as const
 
 /** English dictionary, keyed by the Chinese one. */
@@ -166,10 +170,11 @@ export const en: Record<keyof typeof zh, string> = {
   testFailed: 'Connection failed: {message}',
   httpStatus: 'HTTP {status}',
   noMessage: 'the host gave no reason',
-  panelTitle: 'Database connections',
-  guideEntryHint: 'Browse the databases, tables, and columns of a connection.',
-  browseConnection: 'Connection to browse',
+  panelTitle: 'Databases',
+  guideEntryHint: 'Browse a connection\'s databases, tables, and columns, and run read-only SQL beside them.',
+  currentConnection: 'Connection',
   browseEmpty: 'No connection is saved yet. Add one under Settings → Databases.',
+  toggleTree: 'Browse tree',
   filter: 'Filter names',
   refresh: 'Refresh',
   retry: 'Retry',
@@ -180,12 +185,14 @@ export const en: Record<keyof typeof zh, string> = {
   loadingColumns: 'Reading columns…',
   noColumns: 'This table has no visible column.',
   copyName: 'Copy {name}',
+  expandNode: 'Expand {name}',
+  collapseNode: 'Collapse {name}',
+  readTable: 'Read the rows of {name}',
+  insertName: 'Insert {name} into the editor',
+  resizeTree: 'Drag to resize the browse tree',
   rows: '~{count} rows',
   rowsUnknown: 'rows unknown',
   notNull: 'not null',
-  queryTitle: 'SQL query',
-  queryGuideHint: 'Run one read-only statement against a connection and read the rows.',
-  queryConnection: 'Connection to query',
   querySql: 'SQL statement',
   queryPlaceholder: 'SELECT * FROM table_name LIMIT 100',
   queryRun: 'Run',
@@ -194,7 +201,19 @@ export const en: Record<keyof typeof zh, string> = {
   queryNoRows: 'The statement returned no rows.',
   querySummary: '{rows} rows · {ms} ms',
   queryTruncated: 'cut at the row cap',
+  hostStale: 'The host half serves no such route: dsh is most likely still running the generation loaded before the update. Restart dsh and try again.',
 }
 
 /** One dictionary key of the database settings page. */
 export type DbLocaleKey = keyof typeof zh
+
+/**
+ * The translate seat, narrowed to this plugin's dictionary.
+ *
+ * Every surface this plugin draws reads its copy through one of these, so the
+ * shape is named once here rather than repeated in each component.
+ * @param key - dictionary key of the plugin's copy.
+ * @param params - values substituted into the template's placeholders.
+ * @returns the copy for the active locale.
+ */
+export type DbCopy = (key: DbLocaleKey, params?: Record<string, string>) => string

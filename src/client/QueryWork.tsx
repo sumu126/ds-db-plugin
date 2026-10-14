@@ -1,57 +1,48 @@
 /**
- * The query window: pick a connection, write one read-only statement, run it,
- * and read the rows it produced.
+ * The work half of the database workbench: the statement editor and the one
+ * outcome the last run left.
  *
- * The window draws every part of the outcome itself and reads nothing: the state
- * arrives through its inject face, and each phase decides what shows — the
- * sentence a refusal came back as, the running notice, or the result grid.
+ * It draws what the query state holds and reads nothing else: each phase decides
+ * what shows — the sentence a refusal came back as, the running notice, or the
+ * result grid. The editor's element is handed in rather than owned, because the
+ * browse tree inserts names into it at the caret.
  *
- * @module dsh-ds-db/src/client/DatabaseQueryPanel
+ * @module dsh-ds-db/src/client/QueryWork
  */
 
-import type { ReactNode } from 'react'
+import type { ReactNode, RefObject } from 'react'
 import {
-  Button, IconCodeOutline16, IconPlayOutline16, IconStopFill16, type IconProps,
+  Button, IconPlayOutline16, IconStopFill16,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { QueryCell } from '../contract.ts'
-import type { DbQueryFace, QueryAnswer } from './query.ts'
-import type { DbLocaleKey } from './locales.ts'
+import type { QueryActions, QueryAnswer, QueryState } from './query.ts'
+import type { DbCopy } from './locales.ts'
 import styles from './query.module.css'
 
-/** Props the renderer binds for this right-sidebar tab. */
-export type DatabaseQueryPanelProps =
-  PropsRuntime<'sidebar.right.pane.tab'>
-  & PropsLocale<'settings.db'>
-  & InjectFace<DbQueryFace>
-
-/** The translate seat, narrowed to this plugin's dictionary. */
-type Copy = (key: DbLocaleKey, params?: Record<string, string>) => string
-
-/**
- * The guide card's glyph for this tab type.
- * @param props - the square edge the guide asks for.
- * @returns the statement glyph.
- */
-export function SqlPanelIcon({ size }: IconProps): ReactNode {
-  return <IconCodeOutline16 size={size} />
+/** Everything the work half renders, and the editor element it writes through. */
+export interface QueryWorkProps {
+  /** The query state as the controller holds it. */
+  state: QueryState
+  /** Its gestures. */
+  work: QueryActions
+  /** The editor's element, so an insert from the tree lands at the caret. */
+  editor: RefObject<HTMLTextAreaElement>
+  /**
+   * Where the caret is, whenever it moves.
+   *
+   * Reported rather than owned: the element lives here, but the name the tree
+   * inserts has to land where the reader left the caret, and the tree is a
+   * sibling. A blurred textarea still remembers its caret, so this survives the
+   * click on the tree that sends the insert.
+   * @param at - the caret's offset in the statement.
+   */
+  onCaret: (at: number) => void
+  /** The copy seat. */
+  t: DbCopy
 }
 
 /**
- * The window's chip title.
- *
- * Registered rather than left to the type definition, for the reason the
- * catalog's title is: a chip would otherwise keep the title the registry
- * captured when the tab opened.
- * @param props - the slot's locale seat.
- * @returns the window's name in the active language.
- */
-export function DatabaseQueryTitle({ t }: PropsLocale<'settings.db'>): ReactNode {
-  return t('queryTitle')
-}
-
-/**
- * One cell as the window shows it.
+ * One cell as the workbench shows it.
  *
  * A null cell and one the row does not carry both show as nothing, the way the
  * tool card's own table shows them: one query answered the same way should not
@@ -67,59 +58,30 @@ function cellText(cell: QueryCell | undefined): string {
 }
 
 /**
- * Render the query window.
- * @param props - the window's snapshot source, actions, and localized copy.
- * @returns the picker, the editor, and one outcome; or the notice that replaces
- * them when there is nothing to query.
+ * Render the editor and the last run's outcome.
+ * @param props - the query state, its gestures, the editor element, and the copy seat.
+ * @returns the statement editor and one outcome below it.
  */
-export function DatabaseQueryPanel(props: DatabaseQueryPanelProps): ReactNode {
-  const { t, useDbQuery, chooseConnection, editSql, run, cancel } = props
-  const state = useDbQuery(snapshot => snapshot)
+export function QueryWork({ state, work, editor, onCaret, t }: QueryWorkProps): ReactNode {
   const running = state.phase.status === 'running'
-
-  if (!state.available) return <p className={styles.notice} role="status">{t('unavailable')}</p>
-  if (state.connections.length === 0) return <p className={styles.notice} role="status">{t('browseEmpty')}</p>
-
-  // The picker always shows a connection the window can address: a snapshot the
-  // window holds while the settings document moves under it can name one that is
-  // no longer saved, and an empty picker would say nothing about where a run goes.
-  const selected = state.connections.some(entry => entry.id === state.connection)
-    ? state.connection
-    : state.connections[0]?.id ?? ''
-
   return (
-    <section className={styles.panel} data-ds-db-query>
-      <header className={styles.head}>
-        <label className={styles.picker}>
-          <span className={styles.srOnly}>{t('queryConnection')}</span>
-          <select
-            className={styles.select}
-            value={selected}
-            onChange={event => { chooseConnection(event.target.value) }}
-          >
-            {state.connections.map(connection => (
-              <option key={connection.id} value={connection.id}>
-                {connection.active ? `${connection.name} · ${t('inUse')}` : connection.name}
-              </option>
-            ))}
-          </select>
-        </label>
-      </header>
-
+    <div className={styles.work} data-ds-db-work>
       <div className={styles.editor}>
         <textarea
+          ref={editor}
           className={styles.sql}
           value={state.sql}
           aria-label={t('querySql')}
           placeholder={t('queryPlaceholder')}
           spellCheck={false}
-          onChange={event => { editSql(event.target.value) }}
+          onChange={event => { work.editSql(event.target.value) }}
+          onSelect={event => { onCaret(event.currentTarget.selectionStart) }}
           onKeyDown={(event) => {
             // The shortcut a terminal user reaches for; the button stays the
             // discoverable path.
             if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
               event.preventDefault()
-              run()
+              work.run()
             }
           }}
         />
@@ -127,12 +89,12 @@ export function DatabaseQueryPanel(props: DatabaseQueryPanelProps): ReactNode {
           <span className={styles.hint}>{t('queryHint')}</span>
           {running
             ? (
-              <Button size="sm" variant="outline" icon={<IconStopFill16 />} onClick={cancel}>
+              <Button size="sm" variant="outline" icon={<IconStopFill16 />} onClick={work.cancel}>
                 {t('cancel')}
               </Button>
               )
             : (
-              <Button size="sm" variant="primary" icon={<IconPlayOutline16 />} onClick={run}>
+              <Button size="sm" variant="primary" icon={<IconPlayOutline16 />} onClick={work.run}>
                 {t('queryRun')}
               </Button>
               )}
@@ -146,14 +108,14 @@ export function DatabaseQueryPanel(props: DatabaseQueryPanelProps): ReactNode {
           : null}
         {state.phase.status === 'done' ? <Result answer={state.phase.answer} t={t} /> : null}
       </div>
-    </section>
+    </div>
   )
 }
 
 /** Props of one run's result. */
 interface ResultProps {
   answer: QueryAnswer
-  t: Copy
+  t: DbCopy
 }
 
 /**

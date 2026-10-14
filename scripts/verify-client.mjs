@@ -188,8 +188,25 @@ const MYSQL_DESCRIPTOR = {
 const ANSWERS = new Map([
   [DB_DIALECTS_PATH, { installed: [MYSQL_DESCRIPTOR], known: [] }],
   [DB_DATABASES_PATH, { connection: 'A', databases: [{ name: 'app', charset: 'utf8mb4', collation: 'utf8mb4_bin' }] }],
-  [DB_TABLES_PATH, { connection: 'A', database: 'app', tables: [{ name: 'events', type: 'BASE TABLE', engine: 'InnoDB', estimatedRows: 12, comment: '' }] }],
-  [DB_COLUMNS_PATH, { connection: 'A', database: 'app', table: 'events', columns: [{ name: 'id', type: 'bigint', nullable: false, default: null, key: 'PRI', extra: 'auto_increment', comment: '' }] }],
+  // `sqlName` is what the host spells for a statement: MySQL quotes with
+  // backticks, and the page never writes one itself.
+  [DB_TABLES_PATH, {
+    connection: 'A',
+    database: 'app',
+    tables: [{
+      name: 'events', sqlName: '`app`.`events`', type: 'BASE TABLE',
+      engine: 'InnoDB', estimatedRows: 12, comment: '',
+    }],
+  }],
+  [DB_COLUMNS_PATH, {
+    connection: 'A',
+    database: 'app',
+    table: 'events',
+    columns: [{
+      name: 'id', sqlName: '`id`', type: 'bigint', nullable: false,
+      default: null, key: 'PRI', extra: 'auto_increment', comment: '',
+    }],
+  }],
 ])
 
 /** Every route call this check caused, in order. */
@@ -226,7 +243,9 @@ globalThis.fetch = async (url, init = {}) => {
     querySignal = init.signal
     calls.push({ path: address.pathname, query: {}, method: 'POST', body })
     const answer = queryReply(body)
-    // A held run answers nothing yet; `Response.json` would settle it at once.
+    // A reply is a plain payload, a held promise (a statement the server is
+    // still working on), or a whole Response (a route the host does not serve).
+    if (answer instanceof Response) return answer
     return answer instanceof Promise ? answer : Response.json(answer)
   }
   calls.push({ path: address.pathname, query: Object.fromEntries(address.searchParams), method: 'GET' })
@@ -313,15 +332,17 @@ for (const row of rows) {
 }
 console.log(`registered: settings.section + ${String(rows.length)} tool row(s) (${rows.map(row => String(row.options.key)).join(', ')})`)
 
-// The browser catalog: a right-sidebar page type, its guide card, and the two
-// seats the shell dispatches its body and its chip through.
+// The workbench: one right-sidebar page type, its guide card, and the two seats
+// the shell dispatches its body and its chip through. One type, because a pane
+// renders one tab body at a time — a tree and an editor in two types could never
+// be seen together, which is the whole point of the workbench.
 assert.deepEqual(
-  [...tabTypes.keys()].sort(),
-  ['dsh-ds-db', 'dsh-ds-db-query'],
-  'the catalog and the query window are registered, under the identities the shell dispatches on',
+  [...tabTypes.keys()],
+  ['dsh-ds-db'],
+  'one tab type is registered, under the package identity the shell dispatches on',
 )
 const tabType = tabTypes.get('dsh-ds-db')
-assert.equal(tabType.kind, 'database', 'opened by kind, since a catalog has no resource address')
+assert.equal(tabType.kind, 'database', 'opened by kind, since the workbench has no resource address')
 assert.equal(tabType.title(), pageZh.panelTitle, 'the chip label is translated at use, so a language switch reaches it')
 // The guide is the only way a page type is reached: the strip's add control
 // opens the guide, so a type without a card there cannot be opened at all.
@@ -330,46 +351,29 @@ assert.equal(tabType.guide[0].title(), pageZh.panelTitle)
 assert.equal(tabType.guide[0].description(), pageZh.guideEntryHint)
 assert.equal(typeof tabType.guide[0].icon, 'function', 'the card carries its own glyph')
 
-const queryType = tabTypes.get('dsh-ds-db-query')
-assert.equal(queryType.kind, 'query', 'the query window is opened by its own kind')
-assert.equal(queryType.title(), pageZh.queryTitle)
-assert.deepEqual(queryType.guide.map(entry => entry.id), ['query'], 'and contributes exactly one guide card')
-assert.equal(queryType.guide[0].title(), pageZh.queryTitle)
-assert.equal(queryType.guide[0].description(), pageZh.queryGuideHint)
-assert.equal(typeof queryType.guide[0].icon, 'function', 'the card carries its own glyph')
-// A distinct guide order, so the two cards keep a stable order between loads.
-assert.notEqual(queryType.guide[0].order, tabType.guide[0].order)
-
-/** The one seat a name and a key address, now that two page types claim them. */
+/** The one seat a name and a key address. */
 const seatFor = (name, key) => allSeats()
   .find(seat => seat.options.name === name && seat.options.key === key)
 
 const body = seatFor('sidebar.right.pane.tab', 'dsh-ds-db')
-assert.ok(body, 'the panel claims a right-sidebar tab body')
-assert.equal(body.options.locale, 'settings.db', 'the panel resolves its copy from this plugin namespace')
+assert.ok(body, 'the workbench claims a right-sidebar tab body')
+assert.equal(body.options.locale, 'settings.db', 'it resolves its copy from this plugin namespace')
 const chip = seatFor('sidebar.right.pane.tab.title', 'dsh-ds-db')
 assert.ok(chip, 'and a chip title seat, so an open chip follows a language switch')
-const browseFace = body.options.inject()
-assert.ok(browseFace.hooks?.dbBrowse, 'the inject face carries the panel source')
-assert.ok(typeof browseFace.hooks.dbBrowse.getSnapshot === 'function', 'the hooks member is a bare observable source, not a value')
+const workbenchFace = body.options.inject()
+// Both halves arrive through one face: the tree and the editor are one page, so
+// the picker inside the page drives both and neither can address another server.
+assert.ok(workbenchFace.hooks?.dbBrowse, 'the inject face carries the browse tree source')
+assert.ok(workbenchFace.hooks?.dbQuery, 'and the editor source beside it')
+assert.ok(typeof workbenchFace.hooks.dbBrowse.getSnapshot === 'function', 'the hooks members are bare observable sources, not values')
+assert.ok(typeof workbenchFace.hooks.dbQuery.getSnapshot === 'function')
 for (const action of ['chooseConnection', 'editFilter', 'refresh', 'toggleDatabase', 'toggleTable']) {
-  assert.ok(typeof browseFace[action] === 'function', `the inject face exposes the "${action}" action`)
+  assert.ok(typeof workbenchFace.browse[action] === 'function', `the tree's gestures expose the "${action}" action`)
 }
-console.log(`registered: sidebar.right.pane.tab + title for the "${String(tabType.kind)}" type, one guide card`)
-
-// The query window claims the same two seats under its own key, with the
-// actions its editor and its Run control call.
-const queryBody = seatFor('sidebar.right.pane.tab', 'dsh-ds-db-query')
-assert.ok(queryBody, 'the query window claims a right-sidebar tab body')
-assert.equal(queryBody.options.locale, 'settings.db', 'and resolves its copy from the same namespace')
-assert.ok(seatFor('sidebar.right.pane.tab.title', 'dsh-ds-db-query'), 'with a chip title seat of its own')
-const queryFace = queryBody.options.inject()
-assert.ok(queryFace.hooks?.dbQuery, 'the inject face carries the window source')
-assert.ok(typeof queryFace.hooks.dbQuery.getSnapshot === 'function', 'the hooks member is a bare observable source, not a value')
-for (const action of ['chooseConnection', 'editSql', 'run', 'cancel']) {
-  assert.ok(typeof queryFace[action] === 'function', `the window's inject face exposes the "${action}" action`)
+for (const action of ['chooseConnection', 'editSql', 'insertSql', 'readTable', 'run', 'cancel']) {
+  assert.ok(typeof workbenchFace.work[action] === 'function', `the editor's gestures expose the "${action}" action`)
 }
-console.log('registered: sidebar.right.pane.tab + title for the "query" type, one guide card')
+console.log(`registered: sidebar.right.pane.tab + title for one "${String(tabType.kind)}" type, one guide card`)
 
 // The reload property: an unload takes every registration with it. A seat that
 // outlives its fiber is a duplicate contribution on the next load.
@@ -412,60 +416,89 @@ await settle()
 
 const panel = seatFor('sidebar.right.pane.tab', 'dsh-ds-db').options.inject()
 const snapshot = () => panel.hooks.dbBrowse.getSnapshot()
+const state = () => panel.hooks.dbQuery.getSnapshot()
+/** The tree's gestures and the editor's, as the checks below read them. */
+const tree = panel.browse
+const query = panel.work
+/**
+ * One connection for the whole page: the workbench's picker drives both halves,
+ * so a check that moves the page drives both the same way.
+ */
+const choose = (id) => { tree.chooseConnection(id); query.chooseConnection(id) }
 
-assert.equal(snapshot().connection, 'a', 'the panel opens on the connection the tools address')
-// Two reads at boot: the page describes the dialects it offers, and the panel
-// the databases of the connection in use — by name, on that route alone.
+assert.equal(snapshot().connection, 'a', 'the page opens on the connection the tools address')
+// Two reads at boot: the page describes the dialects it offers, and the tree the
+// databases of the connection in use — by name, on that route alone.
 assert.deepEqual(calls, [
   { path: DB_DIALECTS_PATH, query: {}, method: 'GET' },
   { path: DB_DATABASES_PATH, query: { connection: 'A' }, method: 'GET' },
-], 'the page describes the registered dialects, and the panel reads the connection in use by name')
+], 'the page describes the registered dialects, and the tree reads the connection in use by name')
 assert.deepEqual(snapshot().databases, {
   status: 'ready',
   rows: [{ name: 'app', charset: 'utf8mb4', collation: 'utf8mb4_bin' }],
 })
-console.log('panel read: the databases of the connection in use')
+console.log('workbench read: the databases of the connection in use')
 
-panel.toggleDatabase('app')
+tree.toggleDatabase('app')
 await settle()
 assert.deepEqual(calls[2], { path: DB_TABLES_PATH, query: { connection: 'A', database: 'app' }, method: 'GET' })
-assert.deepEqual(snapshot().open.app.tables.rows.map(row => row.name), ['events'], 'a database reads its tables when it is opened')
-panel.toggleDatabase('app')
+const listed = snapshot().open.app.tables.rows
+assert.deepEqual(listed.map(row => row.name), ['events'], 'a database reads its tables when it is opened')
+// The statement-spelled name is the host's: quoting is the dialect's affair, and
+// a page that spelled the name itself would hardcode one server's syntax.
+assert.equal(listed[0].sqlName, '`app`.`events`', 'a table arrives with the name a statement must use')
+tree.toggleDatabase('app')
 assert.equal(snapshot().open.app.open, false, 'and collapsing keeps what it read')
-console.log('panel read: tables on first open, kept through a collapse')
+console.log('workbench read: tables on first open, kept through a collapse')
 
-panel.toggleDatabase('app')
-panel.toggleTable('app', 'events')
+tree.toggleDatabase('app')
+tree.toggleTable('app', 'events')
 await settle()
 assert.deepEqual(calls[3], { path: DB_COLUMNS_PATH, query: { connection: 'A', database: 'app', table: 'events' }, method: 'GET' })
-assert.deepEqual(snapshot().open.app.openTables.events.columns.rows.map(row => row.name), ['id'])
-console.log('panel read: columns on first open')
+const columns = snapshot().open.app.openTables.events.columns.rows
+assert.deepEqual(columns.map(row => row.name), ['id'])
+assert.equal(columns[0].sqlName, '`id`', 'and a column arrives with the name a statement must use')
+console.log('workbench read: columns on first open')
 
 // Filtering is a view over what is already read: it issues no read of its own.
 const before = calls.length
-panel.editFilter('even')
+tree.editFilter('even')
 assert.equal(calls.length, before, 'filtering names calls no route')
-panel.editFilter('')
-console.log('panel read: the filter is client-side')
+tree.editFilter('')
+console.log('workbench read: the filter is client-side')
 
-// ---- The query window's state machine ------------------------------------
+// ---- The workbench's statement half --------------------------------------
 
-const queryWindow = seatFor('sidebar.right.pane.tab', 'dsh-ds-db-query').options.inject()
-const window_ = () => queryWindow.hooks.dbQuery.getSnapshot()
+assert.equal(state().connection, 'a', 'the editor opens on the connection the tools address')
+assert.equal(state().sql, '', 'with an empty statement')
+assert.deepEqual(state().phase, { status: 'idle' }, 'and nothing shown yet')
 
-assert.equal(window_().connection, 'a', 'the window opens on the connection the tools address')
-assert.equal(window_().sql, '', 'with an empty statement')
-assert.deepEqual(window_().phase, { status: 'idle' }, 'and nothing shown yet')
+query.editSql('SELECT id, name FROM events')
+assert.equal(state().sql, 'SELECT id, name FROM events', 'the statement is taken exactly as typed')
+assert.deepEqual(state().phase, { status: 'idle' }, 'and typing shows no outcome of its own')
 
-queryWindow.editSql('SELECT id, name FROM events')
-assert.equal(window_().sql, 'SELECT id, name FROM events', 'the statement is taken exactly as typed')
-assert.deepEqual(window_().phase, { status: 'idle' }, 'and typing shows no outcome of its own')
+// The tree's insert lands where the reader left the caret; an offset the
+// statement has outgrown is clamped; a name spliced onto a word keeps a space so
+// the two do not fuse; and the controller reports back where the caret now
+// belongs, because a separator it may have added moves it.
+query.editSql('SELECT  FROM events')
+assert.equal(query.insertSql('id, name', 7), 15, 'an insert lands at the offset it was given')
+assert.equal(state().sql, 'SELECT id, name FROM events')
+query.insertSql(', extra')
+assert.equal(state().sql, 'SELECT id, name FROM events, extra', 'and at the end when the seat names no offset')
+query.editSql('SELECT `id`')
+assert.equal(query.insertSql('`alias`'), 19, 'a name spliced onto a word is separated, and the offset reported is past it')
+assert.equal(state().sql, 'SELECT `id` `alias`')
+query.insertSql('`x`', 999)
+assert.equal(state().sql, 'SELECT `id` `alias` `x`', 'an offset past the end is clamped')
+console.log('workbench: an inserted name lands at the caret')
 
 const beforeRun = calls.length
-queryWindow.run()
-// The run is in flight before its answer lands, which is what the window shows
-// a spinner for.
-assert.deepEqual(window_().phase, { status: 'running' }, 'a run shows itself in flight')
+query.editSql('SELECT id, name FROM events')
+query.run()
+// The run is in flight before its answer lands, which is what the page shows a
+// spinner for.
+assert.deepEqual(state().phase, { status: 'running' }, 'a run shows itself in flight')
 await settle()
 assert.deepEqual(calls[beforeRun], {
   path: DB_QUERY_PATH,
@@ -473,13 +506,24 @@ assert.deepEqual(calls[beforeRun], {
   method: 'POST',
   body: { connection: 'A', sql: 'SELECT id, name FROM events' },
 }, 'the run addresses the connection by name and carries the statement')
-const done = window_().phase
+const done = state().phase
 assert.equal(done.status, 'done', 'the answer replaces the running phase')
 assert.deepEqual(done.answer.columns, ['id', 'name'])
 assert.deepEqual(done.answer.rows, [{ id: 1, name: 'a' }])
 assert.equal(done.answer.rowCount, 1)
 assert.equal(done.answer.truncated, false)
-console.log(`query window: ran one statement, ${String(done.answer.rowCount)} row(s)`)
+console.log(`workbench: ran one statement, ${String(done.answer.rowCount)} row(s)`)
+
+// Reading a table is the gesture the tree is used through: the statement appears
+// in the editor — so what ran stays readable — and it goes out at once.
+const beforeRead = calls.length
+query.readTable('`app`.`events`')
+assert.equal(state().sql, 'SELECT * FROM `app`.`events`', 'reading a table puts the statement it ran in the editor')
+await settle()
+assert.deepEqual(calls[beforeRead].body, { connection: 'A', sql: 'SELECT * FROM `app`.`events`' }, 'and ran it')
+const read = state().phase
+assert.equal(read.status, 'done', 'the read answered')
+console.log('workbench: reading a table composed and ran its statement')
 
 // A run the server refuses is shown as the sentence it came back with, in place
 // of the rows — and it is a value, not a failed request.
@@ -487,45 +531,59 @@ queryReply = () => ({
   columns: [], rows: [], rowCount: 0, truncated: false, elapsedMs: 0,
   message: 'sql must be exactly one statement: multiple statements are refused because this plugin is read-only',
 })
-queryWindow.editSql('SELECT 1; DROP TABLE users')
-queryWindow.run()
+query.editSql('SELECT 1; DROP TABLE users')
+query.run()
 await settle()
-assert.deepEqual(window_().phase, {
+assert.deepEqual(state().phase, {
   status: 'failed',
   message: 'sql must be exactly one statement: multiple statements are refused because this plugin is read-only',
 }, 'a refusal replaces the rows with its own sentence')
-console.log('query window: a refused statement is shown as its sentence')
+console.log('workbench: a refused statement is shown as its sentence')
 
 // The run in flight can be ended. The stub answers nothing and never settles,
 // which is what a statement the server is still working on looks like.
 queryReply = () => new Promise(() => {})
-queryWindow.editSql('SELECT slow')
-queryWindow.run()
+query.editSql('SELECT slow')
+query.run()
 await settle()
-assert.deepEqual(window_().phase, { status: 'running' }, 'a held run is still in flight')
+assert.deepEqual(state().phase, { status: 'running' }, 'a held run is still in flight')
 const heldSignal = querySignal
 assert.equal(heldSignal.aborted, false, 'and nothing has cancelled it yet')
-queryWindow.cancel()
-assert.equal(heldSignal.aborted, true, 'the window cancelled the request it was waiting on')
-assert.deepEqual(window_().phase, { status: 'idle' }, 'and shows nothing in its place')
-console.log('query window: a run in flight was cancelled')
+query.cancel()
+assert.equal(heldSignal.aborted, true, 'the page cancelled the request it was waiting on')
+assert.deepEqual(state().phase, { status: 'idle' }, 'and shows nothing in its place')
+console.log('workbench: a run in flight was cancelled')
+
+// The host half is loaded at boot while the browser half is served from disk, so
+// a page that refreshed after an update can reach a host that never registered
+// this route. A bare "HTTP 404" leaves the user nowhere to go; the page names
+// the one thing that fixes it.
+queryReply = () => new Response('not found', { status: 404 })
+query.editSql('SELECT 1')
+query.run()
+await settle()
+assert.deepEqual(state().phase, { status: 'failed', message: pageZh.hostStale },
+  'a route the host does not serve is reported as the restart it needs')
+console.log(`workbench: a missing route says what to do — ${pageZh.hostStale}`)
 
 // Addressing another connection drops the outcome: rows read from one server
-// must not stay on screen under another one's name.
+// must not stay on screen under another one's name. The tree moves with the
+// editor, because one picker drives both.
 queryReply = () => ({ columns: ['id'], rows: [{ id: 1 }], rowCount: 1, truncated: false, elapsedMs: 1 })
-queryWindow.editSql('SELECT id FROM events')
-queryWindow.run()
+query.editSql('SELECT id FROM events')
+query.run()
 await settle()
-assert.equal(window_().phase.status, 'done', 'the statement answered')
-queryWindow.chooseConnection('a')
-assert.equal(window_().phase.status, 'done', 're-picking the connection already addressed keeps the rows')
-queryWindow.chooseConnection('b')
-assert.equal(window_().connection, 'b', 'the window moved to the other connection')
-assert.deepEqual(window_().phase, { status: 'idle' }, 'and dropped the outcome it was showing')
-queryWindow.run()
+assert.equal(state().phase.status, 'done', 'the statement answered')
+choose('a')
+assert.equal(state().phase.status, 'done', 're-picking the connection already addressed keeps the rows')
+choose('b')
+assert.equal(state().connection, 'b', 'the editor moved to the other connection')
+assert.equal(snapshot().connection, 'b', 'and the tree moved with it: one picker drives both halves')
+assert.deepEqual(state().phase, { status: 'idle' }, 'and dropped the outcome it was showing')
+query.run()
 await settle()
 assert.deepEqual(calls[calls.length - 1].body, { connection: 'B', sql: 'SELECT id FROM events' }, 'the next run addresses the connection now chosen')
-console.log('query window: addressing another connection drops the previous outcome')
+console.log('workbench: addressing another connection moves both halves and drops the previous outcome')
 
 await browsing.dispose()
 assert.equal(seats.size, 0, 'and the browsing mount unloads clean too')

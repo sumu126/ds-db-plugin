@@ -553,13 +553,21 @@ async function listTables(
     const { profile: target, view } = face.addressed(requested)
     requireCapability(view, 'tables')
     const tables = await face.access.run(target, view.tables(wanted), signal)
+    const estimates = view.capabilities.has('estimatedRows')
     return {
       connection: target.name,
       database: wanted,
-      // As in `db_tables`: a server that cannot estimate row counts reports
-      // none rather than letting its dialect invent a number the panel would
-      // show as fact.
-      tables: tables.map(row => view.capabilities.has('estimatedRows') ? row : { ...row, estimatedRows: null }),
+      tables: tables.map(row => ({
+        // As in `db_tables`: a server that cannot estimate row counts reports
+        // none rather than letting its dialect invent a number the panel would
+        // show as fact.
+        ...(estimates ? row : { ...row, estimatedRows: null }),
+        // The name as a statement must spell it, decided here because quoting is
+        // the dialect's affair. Qualified by the database the listing came from,
+        // so a reader working in a database other than the connection's default
+        // one still addresses the table it clicked.
+        sqlName: `${view.quoteIdentifier(wanted)}.${view.quoteIdentifier(row.name)}`,
+      })),
     }
   } catch (error: unknown) {
     return { database: wanted, tables: [], message: error instanceof Error ? error.message : String(error) }
@@ -594,11 +602,14 @@ async function listColumns(
   try {
     const { profile: target, view } = face.addressed(requested)
     requireCapability(view, 'columns')
+    const columns = await face.access.run(target, view.columns(wantedDatabase, wantedTable), signal)
     return {
       connection: target.name,
       database: wantedDatabase,
       table: wantedTable,
-      columns: await face.access.run(target, view.columns(wantedDatabase, wantedTable), signal),
+      // Quoted here for the reason the table listing is: the dialect owns how a
+      // name is spelled inside a statement.
+      columns: columns.map(row => ({ ...row, sqlName: view.quoteIdentifier(row.name) })),
     }
   } catch (error: unknown) {
     return {

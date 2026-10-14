@@ -73,6 +73,29 @@ export interface QueryActions {
   chooseConnection: (id: string) => void
   /** Take the statement as typed; a shown outcome is kept. */
   editSql: (text: string) => void
+  /**
+   * Put one name into the statement: at the caret when the seat knows where it
+   * is, at the end otherwise.
+   *
+   * Nothing runs — inserting a name is the reader composing a statement, not
+   * asking for one.
+   * @param text - the text to splice in, already spelled for a statement.
+   * @param at - the offset to splice at; absent means the end.
+   * @returns the offset just past what was inserted, which is where the caret
+   * belongs now. The seat cannot work that out for itself: a separator this
+   * controller added moves it.
+   */
+  insertSql: (text: string, at?: number) => number
+  /**
+   * Show what one table holds: put the statement the window composes into the
+   * editor and run it.
+   *
+   * The window composes exactly one statement anywhere, and it writes only the
+   * keyword: the name arrives spelled for a statement, and how many rows a table
+   * can show is the connection's row cap, which the host applies to every run.
+   * @param name - the table's name as a statement must spell it.
+   */
+  readTable: (name: string) => void
   /** Run the statement; ignored while a run is in flight. */
   run: () => void
   /** End the run in flight, leaving the window with nothing shown. */
@@ -144,6 +167,26 @@ export class DatabaseQueryController {
       editSql: (text) => {
         this.sql = text
         this.publish()
+      },
+      insertSql: (text, at) => {
+        // Clamped rather than trusted: the caret the seat reports belongs to a
+        // rendering of this statement, which a run landing in between can have
+        // replaced with a shorter one.
+        const index = Math.max(0, Math.min(at ?? this.sql.length, this.sql.length))
+        const before = this.sql.slice(0, index)
+        // A name spliced onto a word fuses into it — `…events` + `id` — so one
+        // space goes between unless a punctuation either side already separates
+        // them. A seat that never placed the caret inserts at the end, and this
+        // is what keeps that from writing a name into the middle of a word.
+        const separated = /[\s(,.]$/u.test(before) || /^[\s,.)]/u.test(text) || text.length === 0
+        const inserted = `${separated ? '' : ' '}${text}`
+        this.sql = `${before}${inserted}${this.sql.slice(index)}`
+        this.publish()
+        return index + inserted.length
+      },
+      readTable: (name) => {
+        this.sql = `SELECT * FROM ${name}`
+        void this.execute()
       },
       run: () => { void this.execute() },
       cancel: () => { this.cancel() },

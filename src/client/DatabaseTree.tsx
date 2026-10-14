@@ -1,55 +1,38 @@
 /**
- * The browser catalog panel: the saved connections, the databases the chosen
- * one sees, and the tables and columns opened under them.
+ * The browse tree: a connection's databases, the tables opened under them, and
+ * the columns opened under those.
  *
- * The panel draws every row itself and reads nothing: the tree arrives through
- * its inject face, and each node's own state decides whether it shows a
- * spinner, a list, or the sentence the server refused with.
+ * It draws rows and reads nothing: the tree arrives through its props, and each
+ * node's own state decides whether it shows a spinner, a list, or the sentence
+ * the server refused with. Two gestures belong to the workbench rather than to
+ * the tree — reading a table, and putting a name into the editor — so they are
+ * handed in as callbacks.
  *
- * @module dsh-ds-db/src/client/DatabaseCatalogPanel
+ * @module dsh-ds-db/src/client/DatabaseTree
  */
 
 import { useEffect, useState, type ReactNode } from 'react'
 import {
-  Button, IconCheckOutline16, IconChevronDownOutline14, IconChevronRightOutline14,
-  IconCopyOutline16, IconDatabaseOutline16, IconRefreshOutline16, IconSearchOutline16,
-  type IconProps,
+  Button, IconChevronDownOutline14, IconChevronRightOutline14, IconCheckOutline16,
+  IconCopyOutline16, IconDataOutline16, IconPlusOutline16, IconSearchOutline16,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ColumnNode, TableNode } from '../contract.ts'
-import type { DbBrowseFace, OpenDatabase } from './browse.ts'
-import type { DbLocaleKey } from './locales.ts'
-import styles from './panel.module.css'
+import type { BrowseActions, BrowseState, OpenDatabase } from './browse.ts'
+import type { DbCopy } from './locales.ts'
+import styles from './tree.module.css'
 
-/** Props the renderer binds for this right-sidebar tab. */
-export type DatabaseCatalogPanelProps =
-  PropsRuntime<'sidebar.right.pane.tab'>
-  & PropsLocale<'settings.db'>
-  & InjectFace<DbBrowseFace>
-
-/** The translate seat, narrowed to this plugin's dictionary. */
-type Copy = (key: DbLocaleKey, params?: Record<string, string>) => string
-
-/**
- * The guide card's glyph for this tab type.
- * @param props - the square edge the guide asks for.
- * @returns the database glyph.
- */
-export function DbPanelIcon({ size }: IconProps): ReactNode {
-  return <IconDatabaseOutline16 size={size} />
-}
-
-/**
- * The panel's chip title.
- *
- * Registered rather than left to the type definition, because the chip otherwise
- * keeps the title the registry captured when the tab opened and a language
- * switch would leave it behind.
- * @param props - the slot's locale seat.
- * @returns the panel's name in the active language.
- */
-export function DatabaseCatalogTitle({ t }: PropsLocale<'settings.db'>): ReactNode {
-  return t('panelTitle')
+/** Everything the tree renders, and the two gestures it hands back. */
+export interface DatabaseTreeProps {
+  /** The tree as the browse controller holds it. */
+  state: BrowseState
+  /** The tree's own gestures: expanding, filtering, refreshing. */
+  browse: BrowseActions
+  /** Read one table: put its statement in the editor and run it. */
+  onReadTable: (table: TableNode) => void
+  /** Put one statement-spelled name into the editor at the caret. */
+  onInsert: (name: string) => void
+  /** The copy seat. */
+  t: DbCopy
 }
 
 /** A name matches when the filter is empty or is a substring of it. */
@@ -58,13 +41,12 @@ function matches(name: string, needle: string): boolean {
 }
 
 /**
- * Render the browser catalog.
- * @param props - the panel's snapshot source, actions, and localized copy.
- * @returns the picker, the filter, and the tree; or the notice that replaces it.
+ * Render the browse tree.
+ * @param props - the tree state, its gestures, and the workbench's two callbacks.
+ * @returns the filter and the three-level tree.
  */
-export function DatabaseCatalogPanel(props: DatabaseCatalogPanelProps): ReactNode {
-  const { t, useDbBrowse, chooseConnection, editFilter, refresh, toggleDatabase, toggleTable } = props
-  const state = useDbBrowse(snapshot => snapshot)
+export function DatabaseTree(props: DatabaseTreeProps): ReactNode {
+  const { state, browse, onReadTable, onInsert, t } = props
   const [copied, setCopied] = useState('')
 
   useEffect(() => {
@@ -79,34 +61,11 @@ export function DatabaseCatalogPanel(props: DatabaseCatalogPanelProps): ReactNod
     setCopied(key)
   }
 
-  if (!state.available) return <p className={styles.notice} role="status">{t('unavailable')}</p>
-  if (state.connections.length === 0) return <p className={styles.notice} role="status">{t('browseEmpty')}</p>
-
   const needle = state.filter.trim().toLowerCase()
   const databases = state.databases.status === 'ready' ? state.databases.rows : []
 
   return (
-    <section className={styles.panel} data-ds-db-catalog>
-      <header className={styles.head}>
-        <label className={styles.picker}>
-          <span className={styles.srOnly}>{t('browseConnection')}</span>
-          <select
-            className={styles.select}
-            value={state.connection}
-            onChange={event => { chooseConnection(event.target.value) }}
-          >
-            {state.connections.map(connection => (
-              <option key={connection.id} value={connection.id}>
-                {connection.active ? `${connection.name} · ${t('inUse')}` : connection.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <Button size="sm" variant="outline" icon={<IconRefreshOutline16 />} onClick={refresh}>
-          {t('refresh')}
-        </Button>
-      </header>
-
+    <div className={styles.tree} data-ds-db-tree>
       <div className={styles.search}>
         <IconSearchOutline16 size={14} />
         <input
@@ -114,14 +73,13 @@ export function DatabaseCatalogPanel(props: DatabaseCatalogPanelProps): ReactNod
           value={state.filter}
           aria-label={t('filter')}
           placeholder={t('filter')}
-          onChange={event => { editFilter(event.target.value) }}
+          onChange={event => { browse.editFilter(event.target.value) }}
         />
       </div>
-
-      <div className={styles.tree}>
+      <div className={styles.scroll}>
         {state.databases.status === 'loading' ? <p className={styles.notice}>{t('loadingDatabases')}</p> : null}
         {state.databases.status === 'failed'
-          ? <Failure message={state.databases.message} label={t('retry')} onRetry={refresh} />
+          ? <Failure message={state.databases.message} label={t('retry')} onRetry={browse.refresh} />
           : null}
         {state.databases.status === 'ready' && databases.length === 0
           ? <p className={styles.notice}>{t('noDatabases')}</p>
@@ -138,18 +96,14 @@ export function DatabaseCatalogPanel(props: DatabaseCatalogPanelProps): ReactNod
               return (
                 <li key={node.name}>
                   <div className={styles.row}>
-                    <button
-                      type="button"
-                      className={styles.disclosure}
-                      aria-expanded={entry?.open === true}
-                      onClick={() => { toggleDatabase(node.name) }}
-                    >
-                      <span className={styles.caret}>
-                        {entry?.open === true ? <IconChevronDownOutline14 /> : <IconChevronRightOutline14 />}
-                      </span>
-                      <span className={styles.name}>{node.name}</span>
-                      <span className={styles.meta}>{node.charset}</span>
-                    </button>
+                    <Caret
+                      open={entry?.open === true}
+                      name={node.name}
+                      t={t}
+                      onClick={() => { browse.toggleDatabase(node.name) }}
+                    />
+                    <span className={styles.name} title={node.name}>{node.name}</span>
+                    <span className={styles.meta}>{node.charset}</span>
                     <CopyButton
                       label={t('copyName', { name: node.name })}
                       copied={copied === node.name}
@@ -164,8 +118,10 @@ export function DatabaseCatalogPanel(props: DatabaseCatalogPanelProps): ReactNod
                         needle={needle}
                         t={t}
                         copied={copied}
-                        onToggle={toggleTable}
-                        onRetry={() => { toggleDatabase(node.name) }}
+                        onReadTable={onReadTable}
+                        onInsert={onInsert}
+                        onToggle={browse.toggleTable}
+                        onRetry={() => { browse.toggleDatabase(node.name) }}
                         onCopy={copy}
                       />
                       )
@@ -175,7 +131,7 @@ export function DatabaseCatalogPanel(props: DatabaseCatalogPanelProps): ReactNod
             })}
         </ul>
       </div>
-    </section>
+    </div>
   )
 }
 
@@ -184,8 +140,10 @@ interface TableListProps {
   entry: OpenDatabase
   database: string
   needle: string
-  t: Copy
+  t: DbCopy
   copied: string
+  onReadTable: (table: TableNode) => void
+  onInsert: (name: string) => void
   onToggle: (database: string, table: string) => void
   onRetry: () => void
   onCopy: (key: string, text: string) => void
@@ -193,11 +151,11 @@ interface TableListProps {
 
 /**
  * The tables of one expanded database.
- * @param props - the database's own state and the panel's callbacks.
+ * @param props - the database's own state and the workbench's callbacks.
  * @returns the table rows, or the sentence the read refused with.
  */
 function TableList(props: TableListProps): ReactNode {
-  const { entry, database, needle, t, copied, onToggle, onRetry, onCopy } = props
+  const { entry, database, needle, t, copied, onReadTable, onInsert, onToggle, onRetry, onCopy } = props
   if (entry.tables.status === 'loading') return <p className={styles.notice}>{t('loadingTables')}</p>
   if (entry.tables.status === 'failed') {
     return <Failure message={entry.tables.message} label={t('retry')} onRetry={onRetry} />
@@ -209,20 +167,34 @@ function TableList(props: TableListProps): ReactNode {
       {tables.map(table => (
         <li key={table.name}>
           <div className={styles.row}>
-            <button
-              type="button"
-              className={styles.disclosure}
-              aria-expanded={entry.openTables[table.name]?.open === true}
+            <Caret
+              open={entry.openTables[table.name]?.open === true}
+              name={table.name}
+              t={t}
               onClick={() => { onToggle(database, table.name) }}
+            />
+            <span
+              className={styles.name}
+              title={t('readTable', { name: table.name })}
+              // The gesture a database client is read through: the caret still
+              // shows the columns, and reading the table is a double click. The
+              // row's own button is the same read, for a pointer that cannot
+              // double-click and for a keyboard that has no such gesture.
+              onDoubleClick={() => { onReadTable(table) }}
             >
-              <span className={styles.caret}>
-                {entry.openTables[table.name]?.open === true
-                  ? <IconChevronDownOutline14 />
-                  : <IconChevronRightOutline14 />}
-              </span>
-              <span className={styles.name}>{table.name}</span>
-              <span className={styles.meta}>{tableDetail(table, t)}</span>
-            </button>
+              {table.name}
+            </span>
+            <span className={styles.meta}>{tableDetail(table, t)}</span>
+            <IconAction
+              label={t('readTable', { name: table.name })}
+              icon={<IconDataOutline16 size={13} />}
+              onClick={() => { onReadTable(table) }}
+            />
+            <IconAction
+              label={t('insertName', { name: table.name })}
+              icon={<IconPlusOutline16 size={13} />}
+              onClick={() => { onInsert(table.sqlName) }}
+            />
             <CopyButton
               label={t('copyName', { name: `${database}.${table.name}` })}
               copied={copied === `${database}.${table.name}`}
@@ -234,6 +206,7 @@ function TableList(props: TableListProps): ReactNode {
               <ColumnList
                 columns={entry.openTables[table.name]?.columns}
                 t={t}
+                onInsert={onInsert}
                 onRetry={() => { onToggle(database, table.name) }}
               />
               )
@@ -245,7 +218,7 @@ function TableList(props: TableListProps): ReactNode {
 }
 
 /** The one-line detail a table row shows: type, engine, and row estimate. */
-function tableDetail(table: TableNode, t: Copy): string {
+function tableDetail(table: TableNode, t: DbCopy): string {
   const parts = [table.type]
   if (table.engine !== null && table.engine.length > 0) parts.push(table.engine)
   parts.push(table.estimatedRows === null ? t('rowsUnknown') : t('rows', { count: String(table.estimatedRows) }))
@@ -256,17 +229,18 @@ function tableDetail(table: TableNode, t: Copy): string {
 /** Props of one table's column list. */
 interface ColumnListProps {
   columns: OpenDatabase['openTables'][string]['columns'] | undefined
-  t: Copy
+  t: DbCopy
+  onInsert: (name: string) => void
   onRetry: () => void
 }
 
 /**
  * The columns of one expanded table.
- * @param props - the table's own state, the panel's copy seat, and its retry.
+ * @param props - the table's own state, the copy seat, and the insert gesture.
  * @returns the column rows, or the sentence the read refused with.
  */
 function ColumnList(props: ColumnListProps): ReactNode {
-  const { columns, t, onRetry } = props
+  const { columns, t, onInsert, onRetry } = props
   if (columns === undefined || columns.status === 'loading') return <p className={styles.notice}>{t('loadingColumns')}</p>
   if (columns.status === 'failed') return <Failure message={columns.message} label={t('retry')} onRetry={onRetry} />
   if (columns.rows.length === 0) return <p className={styles.notice}>{t('noColumns')}</p>
@@ -279,9 +253,48 @@ function ColumnList(props: ColumnListProps): ReactNode {
           {column.key.length > 0 ? <span className={styles.tag}>{column.key}</span> : null}
           {!column.nullable ? <span className={styles.tag}>{t('notNull')}</span> : null}
           {column.extra.length > 0 ? <span className={styles.tag}>{column.extra}</span> : null}
+          <IconAction
+            label={t('insertName', { name: column.name })}
+            icon={<IconPlusOutline16 size={13} />}
+            onClick={() => { onInsert(column.sqlName) }}
+          />
         </li>
       ))}
     </ul>
+  )
+}
+
+/** Props of one node's disclosure. */
+interface CaretProps {
+  open: boolean
+  name: string
+  t: DbCopy
+  onClick: () => void
+}
+
+/**
+ * The disclosure one parent row carries.
+ *
+ * Its own control rather than the row's: reading a table is a double click on
+ * the name, and a single click on a button that also owned the name would fire
+ * on the way to it. The name it toggles is in its accessible name, so a row's
+ * controls do not all read as the node they belong to.
+ * @param props - whether the node is open, whose node it is, the copy seat, and the gesture.
+ * @returns the caret button.
+ */
+function Caret({ open, name, t, onClick }: CaretProps): ReactNode {
+  const label = t(open ? 'collapseNode' : 'expandNode', { name })
+  return (
+    <button
+      type="button"
+      className={styles.caretButton}
+      aria-expanded={open}
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+    >
+      {open ? <IconChevronDownOutline14 /> : <IconChevronRightOutline14 />}
+    </button>
   )
 }
 
@@ -328,6 +341,32 @@ function CopyButton({ label, copied, onCopy }: CopyButtonProps): ReactNode {
       onClick={onCopy}
     >
       {copied ? <IconCheckOutline16 size={13} /> : <IconCopyOutline16 size={13} />}
+    </button>
+  )
+}
+
+/** Props of an icon-only row action. */
+interface IconActionProps {
+  label: string
+  icon: ReactNode
+  onClick: () => void
+}
+
+/**
+ * One icon-only action a row carries.
+ * @param props - the accessible name, the glyph, and the gesture.
+ * @returns the icon button.
+ */
+function IconAction({ label, icon, onClick }: IconActionProps): ReactNode {
+  return (
+    <button
+      type="button"
+      className={styles.iconButton}
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+    >
+      {icon}
     </button>
   )
 }

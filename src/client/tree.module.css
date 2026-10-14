@@ -1,44 +1,21 @@
-/* Browser catalog panel: the connection picker, the name filter, and the tree. */
+/* The browse tree inside the database workbench: the name filter, and the three
+   levels of nodes under it. The connection picker lives in the workbench's own
+   toolbar, because the tree and the editor are addressed as one connection. */
 
-.panel {
+.tree {
   display: flex;
   flex-direction: column;
+  min-width: 0;
   min-height: 0;
   height: 100%;
-  font-size: 12px;
-  color: var(--dsw-alias-label-primary);
-}
-
-.head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 10px 4px;
-}
-
-.picker {
-  display: flex;
-  flex: 1;
-  min-width: 0;
-}
-
-.select {
-  flex: 1;
-  min-width: 0;
-  height: 26px;
-  padding: 0 6px;
-  border: 0.5px solid var(--dsw-alias-border-l2);
-  border-radius: 6px;
-  background: var(--dsw-alias-bg-layer-2);
-  color: var(--dsw-alias-label-primary);
-  font-size: 12px;
 }
 
 .search {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 6px;
-  margin: 0 10px 6px;
+  margin: 0 8px 6px;
   padding: 0 8px;
   height: 26px;
   border: 0.5px solid var(--dsw-alias-border-l2);
@@ -57,11 +34,11 @@
   outline: none;
 }
 
-.tree {
+.scroll {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 0 6px 12px;
+  padding: 0 4px 12px;
 }
 
 .list {
@@ -70,9 +47,7 @@
   list-style: none;
 }
 
-/* One tree row: the disclosure the row is opened by, plus its own actions. A
-   copy control cannot sit inside the disclosure button, so the two are siblings
-   and the row owns the hover. */
+/* One tree row: the disclosure, the name, and the row's own actions. */
 .row {
   display: flex;
   align-items: center;
@@ -84,58 +59,64 @@
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
-.disclosure {
-  display: flex;
-  flex: 1;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  padding: 3px 6px;
-  border: none;
-  border-radius: 5px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
 /* Children of an opened node, indented under it. */
 .child {
   padding-left: 14px;
 }
 
 /* The disclosure sits in its own box so a leaf row lines up with a parent. */
-.caret {
+.caretButton {
   display: flex;
   flex: none;
   align-items: center;
   justify-content: center;
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
   color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
 }
 
+.caretButton:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+/* The name is not a button: a single click on it is nothing, and reading the
+   table is a double click — so the text must not be selected on the way there. */
 .name {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  user-select: none;
 }
 
+/* The one-line detail yields before the name does: a row's buttons take a fixed
+   width, so what is left has to go to the name the reader is reading. */
 .meta {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 40%;
+  overflow: hidden;
   color: var(--dsw-alias-label-tertiary);
   font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* One column row: the name, then the type and the key/nullability it carries. */
+/* One column row: the name, the type and the key/nullability it carries.
+   Everything but the row's own action can shrink, so a narrow tree truncates the
+   details instead of pushing the action out of reach. */
 .leaf {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 6px;
-  padding: 2px 6px 2px 38px;
+  min-width: 0;
+  padding: 2px 4px 2px 34px;
   border-radius: 5px;
 }
 
@@ -144,14 +125,25 @@
 }
 
 .leafName {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
   color: var(--dsw-alias-label-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .leafType {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
   color: var(--dsw-alias-label-tertiary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tag {
+  flex: none;
   padding: 0 4px;
   border-radius: 3px;
   background: var(--dsw-alias-bg-layer-2);
@@ -184,8 +176,13 @@
   color: var(--dsw-alias-state-success-primary);
 }
 
+/* A leaf row's action rides at the end rather than pushing the text around. */
+.leaf .iconButton {
+  margin-left: auto;
+}
+
 .notice {
-  margin: 8px 10px;
+  margin: 8px 6px;
   color: var(--dsw-alias-label-tertiary);
   line-height: 1.6;
 }
@@ -194,20 +191,11 @@
   display: flex;
   align-items: flex-start;
   gap: 6px;
-  margin: 4px 10px;
+  margin: 4px 6px;
   padding: 6px 8px;
   border: 0.5px solid var(--dsw-alias-state-error-primary);
   border-radius: 6px;
   color: var(--dsw-alias-state-error-primary);
   line-height: 1.5;
   word-break: break-word;
-}
-
-.srOnly {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
 }

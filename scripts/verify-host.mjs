@@ -808,10 +808,15 @@ assert.deepEqual(catalogDatabases.body, {
 console.log(`catalog databases: ${JSON.stringify(catalogDatabases.body)}`)
 
 const catalogTables = await callRoute(catalogHost.routes, DB_TABLES_PATH, { database: 'app' })
+// `sqlName` is spelled by the dialect, not by the page: the stand-in quotes with
+// double quotes, so a name hardcoded to MySQL's backticks would show up here.
 assert.deepEqual(catalogTables.body, {
   connection: 'A',
   database: 'app',
-  tables: [{ name: 'events', type: 'BASE TABLE', engine: null, estimatedRows: null, comment: '' }],
+  tables: [{
+    name: 'events', sqlName: '"app"."events"', type: 'BASE TABLE',
+    engine: null, estimatedRows: null, comment: '',
+  }],
 })
 console.log(`catalog tables: ${JSON.stringify(catalogTables.body)}`)
 
@@ -820,7 +825,10 @@ assert.deepEqual(catalogColumns.body, {
   connection: 'A',
   database: 'app',
   table: 'events',
-  columns: [{ name: 'id', type: 'integer', nullable: false, default: null, key: '', extra: '', comment: '' }],
+  columns: [{
+    name: 'id', sqlName: '"id"', type: 'integer', nullable: false,
+    default: null, key: '', extra: '', comment: '',
+  }],
 })
 console.log(`catalog columns: ${JSON.stringify(catalogColumns.body)}`)
 

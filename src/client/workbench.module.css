@@ -1,0 +1,134 @@
+/* The database workbench: a connection on top, a browse tree and a statement
+   editor side by side under it, and the divider between them. */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  font-size: 12px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.toolbar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px 6px;
+}
+
+.picker {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+
+.select {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 6px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+}
+
+.iconButton {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+}
+
+.iconButton:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+/* The toggle says whether the tree is showing, which the glyph alone cannot. */
+.iconButton[aria-pressed='true'] {
+  color: var(--dsw-alias-label-primary);
+  border-color: var(--dsw-alias-label-tertiary);
+}
+
+.columns {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  align-items: stretch;
+}
+
+/* The tree's width is the reader's: it is set inline from the drag, and the
+   pane only has to refuse to grow past its share. */
+.treePane {
+  display: flex;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.workPane {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* A grab target rather than a rule: 5px wide, with the hairline drawn inside it
+   so the columns are not pushed apart by a line nobody can hit. */
+.divider {
+  flex: none;
+  width: 5px;
+  cursor: col-resize;
+  background: transparent;
+  touch-action: none;
+}
+
+.divider::after {
+  content: '';
+  display: block;
+  width: 1px;
+  height: 100%;
+  margin: 0 auto;
+  background: var(--dsw-alias-border-l2);
+}
+
+.divider:hover::after {
+  background: var(--dsw-alias-label-tertiary);
+}
+
+/* A divider that takes arrow keys has to show that it has the focus. */
+.divider:focus-visible {
+  outline: none;
+}
+
+.divider:focus-visible::after {
+  width: 2px;
+  background: var(--dsw-alias-label-primary);
+}
+
+.notice {
+  margin: 8px 10px;
+  color: var(--dsw-alias-label-tertiary);
+  line-height: 1.6;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

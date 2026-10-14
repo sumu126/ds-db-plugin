@@ -1,38 +1,12 @@
-/* The query window: the connection picker, the statement editor, and the one
-   outcome the last run left. */
+/* The work half of the database workbench: the statement editor and the one
+   outcome the last run left. The pane it sits in is the workbench's. */
 
-.panel {
+.work {
   display: flex;
   flex-direction: column;
+  min-width: 0;
   min-height: 0;
   height: 100%;
-  font-size: 12px;
-  color: var(--dsw-alias-label-primary);
-}
-
-.head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 10px 4px;
-}
-
-.picker {
-  display: flex;
-  flex: 1;
-  min-width: 0;
-}
-
-.select {
-  flex: 1;
-  min-width: 0;
-  height: 26px;
-  padding: 0 6px;
-  border: 0.5px solid var(--dsw-alias-border-l2);
-  border-radius: 6px;
-  background: var(--dsw-alias-bg-layer-2);
-  color: var(--dsw-alias-label-primary);
-  font-size: 12px;
 }
 
 /* The editor keeps its own height: the result under it is what grows. */
@@ -41,12 +15,12 @@
   flex: none;
   flex-direction: column;
   gap: 6px;
-  padding: 0 10px 8px;
+  padding: 2px 10px 8px 10px;
 }
 
 .sql {
-  min-height: 72px;
-  max-height: 220px;
+  min-height: 84px;
+  max-height: 260px;
   padding: 6px 8px;
   border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 6px;
@@ -141,13 +115,4 @@
   color: var(--dsw-alias-state-error-primary);
   line-height: 1.5;
   word-break: break-word;
-}
-
-.srOnly {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
 }
