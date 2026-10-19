@@ -12,7 +12,7 @@
 
 import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { SettingsPathOpView } from '@deepseek-ai/dsh-api-remotes/client'
-import type { SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client'
+import type { SettingsFace } from './settings-face.ts'
 import { UNSET_PORT, DEFAULT_PASSWORD_REF, type ConnectionProfile, type DatabaseSettings, type DialectCatalog, type DialectDescriptor } from '../contract.ts'
 import { effectiveConnection, type EffectiveConnection } from '../connections.ts'
 
@@ -417,7 +417,7 @@ export class DatabaseSettingsController {
   private failed = false
 
   constructor(
-    private readonly scope: SettingsScope<DatabaseSettings>,
+    private readonly scope: SettingsFace<DatabaseSettings>,
     private readonly credentialFace: DbCredentialsFace,
     private readonly probe: (request: { id?: string, profile?: ConnectionProfile }) => Promise<DbProbe>,
     private readonly loadCatalog: () => Promise<DialectCatalog>,

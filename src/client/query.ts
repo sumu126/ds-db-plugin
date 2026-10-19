@@ -12,7 +12,7 @@
  */
 
 import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-store'
-import type { SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client'
+import type { SettingsFace } from './settings-face.ts'
 import type { DatabaseSettings, QueryCell } from '../contract.ts'
 import type { BrowseConnection } from './browse.ts'
 
@@ -135,7 +135,7 @@ export class DatabaseQueryController {
    * @param route - the one statement route.
    */
   constructor(
-    private readonly scope: SettingsScope<DatabaseSettings>,
+    private readonly scope: SettingsFace<DatabaseSettings>,
     private readonly route: QueryRun,
   ) {
     this.store = createSnapshotStore<QueryState>(this.projection())

@@ -26,6 +26,7 @@ import { DatabaseBrowseController } from './browse.ts'
 import type { QueryAnswer } from './query.ts'
 import { DatabaseQueryController } from './query.ts'
 import { DatabaseWorkbenchPanel, DatabaseWorkbenchTitle, DbPanelIcon, type DbWorkbenchFace } from './DatabaseWorkbenchPanel.tsx'
+import type { SettingsFace } from './settings-face.ts'
 import {
   DB_COLUMNS_PATH, DB_DATABASES_PATH, DB_DIALECTS_PATH, DB_QUERY_PATH, DB_SETTINGS_NAMESPACE, DB_TABLES_PATH, DB_TEST_PATH,
   type ColumnNode, type ConnectionProfile, type DatabaseNode, type DatabaseSettings, type DialectCatalog,
@@ -51,9 +52,19 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 /** Dictionary namespace owned by this plugin. */
 const NS = 'settings.db'
 
-/** Required services (cordis fiber inject). */
+/**
+ * Required services (cordis fiber inject).
+ *
+ * The settings transport is deliberately **not** here. An entry that waits for a
+ * service is reported as unactivated at boot, and a shell that never serves that
+ * service turns the wait into a startup failure — the desktop app's renderer
+ * serves no `settingsScope` at all, so a plugin that required it took the whole
+ * app down. A plugin whose optional page cannot be drawn should lose the page,
+ * not the app; the surfaces that read a settings document wait for the service
+ * further down instead.
+ */
 export const inject = [
-  'slots', 'locale', 'remote', 'remote.credentials', 'settingsScope', 'sidebarRightTabs',
+  'slots', 'locale', 'remote', 'remote.credentials', 'sidebarRightTabs',
 ]
 
 /** Identity of the right-sidebar tab type this plugin contributes, and of its body. */
@@ -70,97 +81,123 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-ds-db: copy dictionaries')
   ctx.effect(() => ctx.locale.register(TOOL_NS, { zh: toolZh, en: toolEn }), 'dsh-ds-db: tool row copy')
 
-  const scope = ctx.settingsScope.bind<DatabaseSettings>({ namespace: DB_SETTINGS_NAMESPACE })
-  const credentials: DbCredentialsFace = {
-    // A refused describe is reported as "nothing stored, still writable": the
-    // control stays usable and the Host is what refuses, rather than the page
-    // guessing a refusal it did not receive.
-    describe: async (ref) => {
-      const response = await ctx.remote.credentials.describe([ref])
-      if (!response.ok) return { configured: false, writable: true }
-      const view = response.value[ref]
-      return { configured: view?.configured ?? false, writable: view?.writable ?? true }
-    },
-    set: async (ref, value) => { await ctx.remote.credentials.set(ref, value) },
-  }
-  const t = ctx.locale.bind(NS)
-  const controller = new DatabaseSettingsController(
-    scope,
-    credentials,
-    request => probeConnection(request, t),
-    loadCatalog,
-  )
-
-  ctx.slots.inject('settings.section', () => ctx.slots.register({
-    name: 'settings.section',
-    id: DB_SETTINGS_NAMESPACE,
-    // After the shipped sections (General 0, Models 10, Plugins 15), so a
-    // deployment's own page never pushes the built-in ones around.
-    order: 40,
-    label: () => t('nav'),
-    locale: NS,
-    inject: (): DbPageFace => ({ hooks: { dbPage: controller.snapshot }, ...controller.actions() }),
-  }, DatabaseSettingsPage))
-
-  // The rows live on the same client entry as the page: the slot is keyed by wire
-  // tool name, so nothing else has to be told which tools this plugin registers.
+  // The rows read the card metadata the host wrote; nothing here reads a
+  // settings document, so they mount whatever shell this is.
   registerToolRows(ctx)
 
-  // The browser catalog: another view over the same settings namespace, reading
-  // the same three queries the listing tools run, on their own routes.
-  const browse = new DatabaseBrowseController(
-    ctx.settingsScope.bind<DatabaseSettings>({ namespace: DB_SETTINGS_NAMESPACE }),
-    browseReads(t),
-  )
-  ctx.effect(() => () => { browse.dispose() }, 'dsh-ds-db: browser catalog reads')
+  // Everything that reads the settings document is mounted under the service
+  // rather than requiring it up front, and under **either generation's**
+  // service:
+  //
+  // - 0.1.6 and earlier serve `settingsScope`, which binds one namespace.
+  // - 0.1.7 and later removed it for `configForms`, where an entry's own Config
+  //   is the form. The desktop app ships this generation, and a plugin that
+  //   required the old service there never activated at all — a waiting entry is
+  //   a startup failure, not a missing page.
+  //
+  // `DB_SETTINGS_NAMESPACE` is both the namespace the older service is asked for
+  // and the entry id the newer one is keyed by: the packaged bundle fixes its row
+  // id to the same string, so one constant answers both.
+  let mounted = false
+  const mount = (scopeCtx: ClientContext, scope: SettingsFace<DatabaseSettings>): void => {
+    // Neither generation serves both; should one ever do so, the first answer
+    // wins rather than mounting every surface twice.
+    if (mounted) return
+    mounted = true
+    const credentials: DbCredentialsFace = {
+      // A refused describe is reported as "nothing stored, still writable": the
+      // control stays usable and the Host is what refuses, rather than the page
+      // guessing a refusal it did not receive.
+      describe: async (ref) => {
+        const response = await scopeCtx.remote.credentials.describe([ref])
+        if (!response.ok) return { configured: false, writable: true }
+        const view = response.value[ref]
+        return { configured: view?.configured ?? false, writable: view?.writable ?? true }
+      },
+      set: async (ref, value) => { await scopeCtx.remote.credentials.set(ref, value) },
+    }
+    const t = scopeCtx.locale.bind(NS)
+    const controller = new DatabaseSettingsController(
+      scope,
+      credentials,
+      request => probeConnection(request, t),
+      loadCatalog,
+    )
 
-  // The statement route the workbench's editor runs on. Its judgement and row
-  // bound are the `db_query` tool's, so the editor is a second pair of hands on
-  // the one read-only path rather than a second path onto the server.
-  const query = new DatabaseQueryController(
-    ctx.settingsScope.bind<DatabaseSettings>({ namespace: DB_SETTINGS_NAMESPACE }),
-    (connection, sql, signal) => runStatement(connection, sql, signal, t),
-  )
-  ctx.effect(() => () => { query.dispose() }, 'dsh-ds-db: workbench statement run')
-
-  // One page type, one card. The right sidebar shows one tab body at a time, so
-  // a tree and an editor in two types could never be seen together — the
-  // workbench is one body holding both halves.
-  ctx.effect(() => ctx.sidebarRightTabs.register({
-    id: TAB_ID,
-    kind: TAB_KIND,
-    title: () => t('panelTitle'),
-    guide: [{
-      id: TAB_KIND,
+    scopeCtx.slots.inject('settings.section', () => scopeCtx.slots.register({
+      name: 'settings.section',
+      id: DB_SETTINGS_NAMESPACE,
+      // After the shipped sections (General 0, Models 10, Plugins 15), so a
+      // deployment's own page never pushes the built-in ones around.
       order: 40,
-      title: () => t('panelTitle'),
-      description: () => t('guideEntryHint'),
-      icon: DbPanelIcon,
-    }],
-  }), 'dsh-ds-db: workbench type')
+      label: () => t('nav'),
+      locale: NS,
+      inject: (): DbPageFace => ({ hooks: { dbPage: controller.snapshot }, ...controller.actions() }),
+    }, DatabaseSettingsPage))
 
-  /**
-   * The workbench's inject face: both halves' snapshots and both halves'
-   * gestures. The picker inside calls both, so the tree and the editor are
-   * always addressed at one connection.
-   */
-  const face = (): DbWorkbenchFace => ({
-    hooks: { dbBrowse: browse.snapshot, dbQuery: query.snapshot },
-    browse: browse.face(),
-    work: query.face(),
+    // The browser catalog: another view over the same settings namespace,
+    // reading the same three queries the listing tools run, on their own routes.
+    const browse = new DatabaseBrowseController(scope, browseReads(t))
+    scopeCtx.effect(() => () => { browse.dispose() }, 'dsh-ds-db: browser catalog reads')
+
+    // The statement route the workbench's editor runs on. Its judgement and row
+    // bound are the `db_query` tool's, so the editor is a second pair of hands on
+    // the one read-only path rather than a second path onto the server.
+    const query = new DatabaseQueryController(
+      scope,
+      (connection, sql, signal) => runStatement(connection, sql, signal, t),
+    )
+    scopeCtx.effect(() => () => { query.dispose() }, 'dsh-ds-db: workbench statement run')
+
+    // One page type, one card. The right sidebar shows one tab body at a time,
+    // so a tree and an editor in two types could never be seen together — the
+    // workbench is one body holding both halves.
+    scopeCtx.effect(() => scopeCtx.sidebarRightTabs.register({
+      id: TAB_ID,
+      kind: TAB_KIND,
+      title: () => t('panelTitle'),
+      guide: [{
+        id: TAB_KIND,
+        order: 40,
+        title: () => t('panelTitle'),
+        description: () => t('guideEntryHint'),
+        icon: DbPanelIcon,
+      }],
+    }), 'dsh-ds-db: workbench type')
+
+    /**
+     * The workbench's inject face: both halves' snapshots and both halves'
+     * gestures. The picker inside calls both, so the tree and the editor are
+     * always addressed at one connection.
+     */
+    const face = (): DbWorkbenchFace => ({
+      hooks: { dbBrowse: browse.snapshot, dbQuery: query.snapshot },
+      browse: browse.face(),
+      work: query.face(),
+    })
+
+    scopeCtx.effect(() => scopeCtx.slots.inject('sidebar.right.pane.tab', () => scopeCtx.slots.register({
+      name: 'sidebar.right.pane.tab', key: TAB_ID, locale: NS,
+      inject: face,
+    }, DatabaseWorkbenchPanel)), 'dsh-ds-db: workbench body')
+
+    // Registered so the chip follows a language switch; without it the chip
+    // keeps the title the registry captured when the tab opened.
+    scopeCtx.effect(() => scopeCtx.slots.inject('sidebar.right.pane.tab.title', () => scopeCtx.slots.register({
+      name: 'sidebar.right.pane.tab.title', key: TAB_ID, locale: NS,
+      inject: face,
+    }, DatabaseWorkbenchTitle)), 'dsh-ds-db: workbench title')
+  }
+
+  ctx.inject(['configForms'], (scopeCtx) => {
+    const forms = scopeCtx.get('configForms') as { get<T>(entryId: string): SettingsFace<T> } | undefined
+    if (forms === undefined) return
+    mount(scopeCtx, forms.get<DatabaseSettings>(DB_SETTINGS_NAMESPACE))
   })
 
-  ctx.effect(() => ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({
-    name: 'sidebar.right.pane.tab', key: TAB_ID, locale: NS,
-    inject: face,
-  }, DatabaseWorkbenchPanel)), 'dsh-ds-db: workbench body')
-
-  // Registered so the chip follows a language switch; without it the chip keeps
-  // the title the registry captured when the tab opened.
-  ctx.effect(() => ctx.slots.inject('sidebar.right.pane.tab.title', () => ctx.slots.register({
-    name: 'sidebar.right.pane.tab.title', key: TAB_ID, locale: NS,
-    inject: face,
-  }, DatabaseWorkbenchTitle)), 'dsh-ds-db: workbench title')
+  ctx.inject(['settingsScope'], (scopeCtx) => {
+    mount(scopeCtx, scopeCtx.settingsScope.bind<DatabaseSettings>({ namespace: DB_SETTINGS_NAMESPACE }))
+  })
 }
 
 /**

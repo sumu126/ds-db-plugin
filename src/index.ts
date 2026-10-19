@@ -97,8 +97,25 @@ export function apply(ctx: Context, config: Config): void {
   // The settings provider is optional: without one the composition entry is
   // the whole configuration, and the configuration page reports the namespace
   // as unavailable rather than editing a section nobody serves.
+  //
+  // Installing a section is also generation-dependent: 0.1.6 and earlier let a
+  // plugin install its own namespace, while 0.1.7 and later project every
+  // entry's own Config into a form and have no such seam. The desktop app ships
+  // the later generation, where this call would throw for a method that is not
+  // there — so it is made only when the service still serves it. There, the
+  // schema declared beside this plugin is already the page, and the Loader hands
+  // the saved values in as `config`.
   ctx.inject(['settings'], (settingsCtx) => {
-    settingsCtx.settings.installSection(ctx, DB_SETTINGS_NAMESPACE, DatabaseSettingsSchema, entry, {
+    const installer = settingsCtx.settings as typeof settingsCtx.settings & {
+      installSection?: (
+        owner: Context,
+        ns: string,
+        schema: unknown,
+        entry: DatabaseSettings,
+        hooks: { setSource: (source: () => DatabaseSettings) => void, onChange: () => void },
+      ) => void
+    }
+    installer.installSection?.(ctx, DB_SETTINGS_NAMESPACE, DatabaseSettingsSchema, entry, {
       setSource: (source) => { readSettings = withCompositionFallback(source) },
       // Nothing is derived from the source besides the reads above.
       onChange: () => {},

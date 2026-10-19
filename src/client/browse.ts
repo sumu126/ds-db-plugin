@@ -12,7 +12,7 @@
  */
 
 import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-store'
-import type { SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client'
+import type { SettingsFace } from './settings-face.ts'
 import type { ColumnNode, DatabaseNode, DatabaseSettings, TableNode } from '../contract.ts'
 
 /** One list's outcome, so a node shows its own progress and its own refusal. */
@@ -144,7 +144,7 @@ export class DatabaseBrowseController {
    * @param routes - the three catalog reads.
    */
   constructor(
-    private readonly scope: SettingsScope<DatabaseSettings>,
+    private readonly scope: SettingsFace<DatabaseSettings>,
     private readonly routes: BrowseReads,
   ) {
     this.browsed = this.addressed()

@@ -38,6 +38,8 @@ let nextSeat = 0
 const dictionaries = new Map()
 /** Namespaces bound through the fake settings scope. */
 const bound = []
+/** Entry ids the newer forms service was asked for. */
+const formReads = []
 /** Right-sidebar tab types registered, by the identity the shell dispatches on. */
 const tabTypes = new Map()
 
@@ -50,16 +52,26 @@ function translate(dict, key, params) {
 }
 
 /**
- * One fake context carrying the five services the client half injects.
+ * One fake context carrying the services the client half injects.
  *
  * Every effect body runs immediately and the disposer it returns is owned here,
  * so `dispose()` reproduces what the framework does on unload. The slot service
  * owns its registrations the same way — the real `slots.inject` installs them
  * under `ctx.effect`, which is why unloading the fiber takes them with it even
  * though `apply` discards the returned disposer.
+ *
+ * @param settings - the settings document the bound scope reports.
+ * @param options - `transport` chooses which settings generation this shell
+ * serves: `settingsScope` (0.1.6 and earlier, the default here), `configForms`
+ * (0.1.7 and later, the desktop app's) or `none` (a shell that serves neither).
  */
-function makeContext(settings = { connections: [], activeId: '' }) {
+function makeContext(settings = { connections: [], activeId: '' }, options = {}) {
+  const transport = options.transport ?? 'settingsScope'
   const disposers = []
+  /** The services this context serves; an inject naming any other waits. */
+  const services = new Set(['slots', 'locale', 'remote', 'remote.credentials', 'sidebarRightTabs'])
+  if (transport === 'settingsScope') services.add('settingsScope')
+  if (transport === 'configForms') services.add('configForms')
   /** Run one effect and keep its disposer, as the framework does. */
   const effect = (callback) => {
     const disposer = callback()
@@ -156,6 +168,35 @@ function makeContext(settings = { connections: [], activeId: '' }) {
         return scope
       },
     },
+    /** The newer generation: one form per plugin entry id, over its own Config. */
+    configForms: {
+      get(entryId) {
+        formReads.push(entryId)
+        return scope
+      },
+    },
+    /**
+     * The optional-service read: a service this context serves, else undefined.
+     * @param name - the service name.
+     * @returns the service, or undefined when this shell does not serve it.
+     */
+    get(name) {
+      return services.has(name) ? ctx[name] : undefined
+    },
+    /**
+     * The inject seat, as the framework gives it: the callback runs once every
+     * service it names is served, and its registrations die with this context.
+     * A service this double does not serve is left waiting — which is exactly
+     * what a shell without a settings transport does to a plugin that requires
+     * one before it will activate.
+     * @param deps - service names the callback needs.
+     * @param callback - the body that runs once they are all served.
+     * @returns a disposer, as the real seat returns one.
+     */
+    inject(deps, callback) {
+      if (!deps.every(service => services.has(service))) return () => {}
+      return effect(() => callback(ctx))
+    },
   }
   return {
     ctx,
@@ -166,8 +207,14 @@ function makeContext(settings = { connections: [], activeId: '' }) {
   }
 }
 
-// The declaration the framework would wait on before calling `apply`.
-assert.deepEqual(inject, ['slots', 'locale', 'remote', 'remote.credentials', 'settingsScope', 'sidebarRightTabs'], 'the client declares the services it reads')
+// The settings transport is deliberately absent: an entry that waits for a
+// service is reported as unactivated at boot, and a shell that does not serve it
+// (the desktop renderer) turns that wait into a startup failure.
+assert.deepEqual(
+  inject,
+  ['slots', 'locale', 'remote', 'remote.credentials', 'sidebarRightTabs'],
+  'the client declares the services it reads, and not the settings transport',
+)
 
 // ---- The stubbed routes and browser globals ------------------------------
 
@@ -587,5 +634,63 @@ console.log('workbench: addressing another connection moves both halves and drop
 
 await browsing.dispose()
 assert.equal(seats.size, 0, 'and the browsing mount unloads clean too')
+
+// ---- The newer settings transport ----------------------------------------
+//
+// 0.1.7 removed `settingsScope`: the form for an entry's own Config comes from
+// `configForms.get(entryId)`. The desktop app ships that generation, which is
+// why a plugin that required the old service never activated there.
+
+formReads.length = 0
+const boundBeforeModern = bound.length
+const modern = makeContext({ connections: [CONNECTION], activeId: 'a' }, { transport: 'configForms' })
+apply(modern.ctx)
+await settle()
+
+assert.deepEqual(formReads, [DB_SETTINGS_NAMESPACE], 'the plugin reads its own entry id from the forms service')
+assert.ok(allSeats().some(seat => seat.options.name === 'settings.section'), 'its settings page mounts from the newer transport')
+assert.deepEqual([...tabTypes.keys()], ['dsh-ds-db'], 'and so does the workbench')
+assert.equal(
+  allSeats().filter(seat => seat.options.name === 'tool.call.toolview').length,
+  TOOL_ROW_KEYS.length,
+  'with the tool rows beside them',
+)
+assert.equal(bound.length, boundBeforeModern, 'and the removed service is not asked for')
+console.log('configForms transport: the page and the workbench mount from it')
+
+await modern.dispose()
+assert.equal(seats.size, 0, 'and unload clean')
+
+// ---- A shell with no settings transport ----------------------------------
+//
+// Neither generation is served. An entry that *requires* one is reported as
+// unactivated, and the desktop turns an unactivated entry into a startup
+// failure — so the plugin activates anyway and loses only the surfaces that
+// read a settings document.
+
+calls.length = 0
+const boundBefore = bound.length
+const bare = makeContext({ connections: [CONNECTION], activeId: 'a' }, { transport: 'none' })
+apply(bare.ctx)
+await settle()
+
+assert.ok(dictionaries.has('settings.db'), 'the dictionaries still register without a settings transport')
+assert.equal(
+  allSeats().filter(seat => seat.options.name === 'tool.call.toolview').length,
+  TOOL_ROW_KEYS.length,
+  'and the tool rows still claim their seats',
+)
+assert.equal(
+  allSeats().some(seat => seat.options.name === 'settings.section'),
+  false,
+  'no settings page is offered where no namespace can be read',
+)
+assert.equal(tabTypes.size, 0, 'and no workbench tab type either')
+assert.equal(bound.length, boundBefore, 'nothing binds a namespace it cannot read')
+assert.equal(calls.length, 0, 'and nothing talks to the host on its own')
+console.log('no settings transport: the plugin activates with only its tool rows')
+
+await bare.dispose()
+assert.equal(seats.size, 0, 'and unloads clean')
 
 console.log('client check passed')
