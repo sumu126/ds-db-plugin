@@ -320,6 +320,38 @@ assert.equal(
 )
 console.log('password references: a draft on another connection\'s reference is reported, its own is not')
 
+// Shapes this bundle was not written against.
+//
+// A client bundle resolves the shell's call blocks at runtime, so a shell of
+// another generation hands over fields this version does not know. The row that
+// consumes them must still answer a string: on 0.2.1 `callText` answered
+// `undefined` for a running call, `text.length` threw inside the slot entry, and
+// the shell — which catches a crashed entry by drawing nothing — emptied the whole
+// group of tool calls in the turn.
+const foreign = [
+  ['no block at all', undefined],
+  ['a running call with neither kind nor argsRaw', { phase: 'start' }],
+  ['a settled call whose content is not a list', { kind: 'result', content: 'nope' }],
+  ['a call whose error is not an object', { kind: 'result', isError: true, error: 'boom' }],
+]
+for (const [label, block] of foreign) {
+  assert.equal(typeof callText(block), 'string', `callText answers a string for ${label}`)
+  assert.equal(typeof genericText(block), 'string', `genericText answers a string for ${label}`)
+  assert.equal(typeof errorText(block), 'string', `errorText answers a string for ${label}`)
+  assert.equal(dbCardModel(block), null, `dbCardModel draws no card for ${label}`)
+}
+assert.equal(
+  callText({ phase: 'start', argsRaw: '{"sql":"select 1"}' }),
+  '{"sql":"select 1"}',
+  'the 0.1.x argument spelling is shown while a call runs',
+)
+assert.equal(
+  callText({ phase: 'start', args: { sql: 'select 2' } }),
+  '{"sql":"select 2"}',
+  'and so is the 0.2.x one, so a running call still shows its statement',
+)
+console.log('foreign blocks: every text helper answers a string, so one odd call cannot empty a turn')
+
 await ctx.fiber.dispose()
 console.log('card check passed')
 process.exit(0)

@@ -31,15 +31,24 @@ type Translate = DbRowProps['t']
 /**
  * The row drawn for every state the cards do not own: still running, failed,
  * dispatched inside another call, or metadata this version cannot read.
+ *
+ * This is the row that must never throw. A shell catches a crashed slot entry and
+ * draws nothing at all, so a single bad read here does not lose one row — it
+ * empties the whole group of tool calls in the turn, which is exactly what
+ * happened on 0.2.1: `callText` answered `undefined` for a running call and the
+ * `text.length` below took the group down.
  */
 function FallbackRow({ toolName, block }: { toolName: string, block: ToolCallBlock }) {
   // A failed call shows why it failed; otherwise the call's own text, which for a
-  // call that is still running is the statement it was given.
-  const text = errorText(block) || callText(block)
+  // call that is still running is the statement it was given. Both helpers answer
+  // a string for any input, and the `?? ''` is the last guarantee that this row
+  // renders something rather than throwing on a shape nobody expected.
+  const text = (errorText(block) || callText(block)) ?? ''
+  const title = typeof toolName === 'string' ? toolName : ''
   return (
     <div className={styles.row}>
       <div className={styles.head}>
-        <span className={styles.title}>{toolName}</span>
+        <span className={styles.title}>{title}</span>
       </div>
       {text.length === 0 ? null : <pre className={styles.plain}>{text}</pre>}
     </div>

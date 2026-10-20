@@ -424,6 +424,18 @@ export class DatabaseSettingsController {
   private catalog: DialectCatalog | undefined
   private saving = false
   private failed = false
+  /**
+   * Whether this controller has let go of its namespace.
+   *
+   * The scope outlives the plugin: it belongs to the settings provider, so its
+   * notifications keep arriving after this fiber is disposed, and every one of
+   * them used to reach into a context that was already inactive — the shell then
+   * reported `cannot get required service "remote" in inactive context` on every
+   * client hot reload. Nothing here may touch the Host once this is set.
+   */
+  private disposed = false
+  /** Removes this controller's subscription; see {@link dispose}. */
+  private readonly unsubscribe: () => void
 
   constructor(
     private readonly scope: SettingsFace<DatabaseSettings>,
@@ -432,7 +444,7 @@ export class DatabaseSettingsController {
     private readonly loadCatalog: () => Promise<DialectCatalog>,
   ) {
     this.store = createSnapshotStore(this.projection())
-    scope.subscribe(() => {
+    this.unsubscribe = scope.subscribe(() => {
       this.publish()
       void this.refreshCredentials()
     })
@@ -448,6 +460,18 @@ export class DatabaseSettingsController {
   /** @returns the page's snapshot store. */
   get snapshot(): SnapshotStore<DatabasePageState> {
     return this.store
+  }
+
+  /**
+   * Let go of the namespace this controller was reading.
+   *
+   * Called from the effect that owns the page, so a disposed page stops receiving
+   * the scope's notifications and every in-flight read stops before it reaches a
+   * context that no longer serves the Host.
+   */
+  dispose(): void {
+    this.disposed = true
+    this.unsubscribe()
   }
 
   /** @returns the page's write actions. */
@@ -557,6 +581,9 @@ export class DatabaseSettingsController {
   }
 
   private publish(): void {
+    // A disposed page is not rendered any more, and the scope can notify once more
+    // between the dispose and the listener actually coming off.
+    if (this.disposed) return
     this.store.set(this.projection())
   }
 
@@ -656,12 +683,16 @@ export class DatabaseSettingsController {
 
   /** Read the database types the page may offer; the chooser waits for this. */
   private async refreshCatalog(): Promise<void> {
+    if (this.disposed) return
     try {
-      this.catalog = await this.loadCatalog()
+      const catalog = await this.loadCatalog()
+      if (this.disposed) return
+      this.catalog = catalog
       this.publish()
     } catch {
       // A catalog the Host would not serve leaves the chooser empty rather
       // than offering a type no dialect can run.
+      if (this.disposed) return
       this.catalog = { installed: [], known: [] }
       this.publish()
     }
@@ -669,12 +700,23 @@ export class DatabaseSettingsController {
 
   /** Read whether the Host holds values for every reference in force. */
   private async refreshCredentials(): Promise<void> {
-    const refs = [...new Set((this.scope.getSnapshot().value?.connections ?? [])
-      .map(profile => profile.passwordEnv))]
-    await Promise.all(refs.map(async (ref) => {
-      const next = await this.credentialFace.describe(ref)
-      this.credentials.set(ref, next)
-    }))
+    if (this.disposed) return
+    try {
+      const refs = [...new Set((this.scope.getSnapshot().value?.connections ?? [])
+        .map(profile => profile.passwordEnv))]
+      await Promise.all(refs.map(async (ref) => {
+        const next = await this.credentialFace.describe(ref)
+        // The read may settle after the page went away; the answer is then about a
+        // context that no longer serves the Host, so it is dropped rather than kept.
+        if (this.disposed) return
+        this.credentials.set(ref, next)
+      }))
+    } catch {
+      // A refused describe leaves the cards showing what they last knew: the page
+      // stays usable and a probe reports the refusal where it matters. This call
+      // is fire-and-forget, so an unhandled rejection here would only reach the
+      // console.
+    }
     this.publish()
   }
 }

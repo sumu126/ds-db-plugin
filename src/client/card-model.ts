@@ -202,6 +202,7 @@ function listCard(
  * that is not an object, and a discriminator this version does not know.
  */
 export function dbCardModel(block: ToolCallBlock): DbCard | null {
+  if (!isRecord(block)) return null
   if (block.parentCallId !== undefined) return null
   if (!('kind' in block)) return null
   if (block.isError) return null
@@ -222,10 +223,16 @@ export function dbCardModel(block: ToolCallBlock): DbCard | null {
  * @returns the call's text blocks joined, empty when it carries none.
  */
 export function genericText(block: ToolCallBlock): string {
-  if (!('kind' in block)) return ''
+  if (!isRecord(block) || !('kind' in block)) return ''
+  // A block from a shell this bundle was not written against can carry anything
+  // here, and a row that throws takes its whole group of tool calls down with it:
+  // the shell catches the slot entry and draws nothing where the rows should be.
+  // Reading defensively is what keeps one foreign field from blanking a turn.
+  if (!Array.isArray(block.content)) return ''
   const parts: string[] = []
   for (const part of block.content) {
-    const text = (part as { text?: unknown }).text
+    if (!isRecord(part)) continue
+    const text = part.text
     if (part.type === 'text' && typeof text === 'string') parts.push(text)
   }
   return parts.join('\n')
@@ -238,11 +245,32 @@ export function genericText(block: ToolCallBlock): string {
  * A running call has no result to show, and its arguments are what there is —
  * the shell's own row shows them for every tool, so claiming this tool's key must
  * not be the thing that hides the statement being run.
+ *
+ * The two generations spell a running call's arguments differently — 0.1.x hands
+ * over `argsRaw`, 0.2.x hands over `args` and leaves `argsRaw` absent until the
+ * call starts — so both are read. Returning a string no matter what is the point:
+ * this used to answer `undefined` on 0.2.x, and the caller's `text.length` threw
+ * inside a slot entry, blanking every tool row of the turn.
  * @param block - the frozen running-or-settled call node.
  * @returns the text a generic row shows for this call.
  */
 export function callText(block: ToolCallBlock): string {
-  return 'kind' in block ? genericText(block) : block.argsRaw
+  if (!isRecord(block)) return ''
+  if ('kind' in block) return genericText(block)
+  const raw = block.argsRaw
+  if (typeof raw === 'string' && raw.length > 0) return raw
+  const args = Reflect.get(block, 'args')
+  if (typeof args === 'string') return args
+  if (isRecord(args)) {
+    try {
+      return JSON.stringify(args)
+    } catch {
+      // A cycle or a value JSON cannot carry: the row shows the tool name and
+      // nothing else rather than throwing on the whole turn.
+      return ''
+    }
+  }
+  return ''
 }
 
 /**
@@ -251,6 +279,12 @@ export function callText(block: ToolCallBlock): string {
  * @returns the recorded reason or code, empty when the call did not fail.
  */
 export function errorText(block: ToolCallBlock): string {
-  if (!('kind' in block) || !block.isError) return ''
-  return block.error?.reason ?? block.error?.code ?? ''
+  if (!isRecord(block) || !('kind' in block)) return ''
+  if (block.isError !== true) return ''
+  const error = block.error
+  if (!isRecord(error)) return ''
+  const reason = error.reason
+  if (typeof reason === 'string') return reason
+  const code = error.code
+  return typeof code === 'string' ? code : ''
 }

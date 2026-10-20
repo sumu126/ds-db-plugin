@@ -123,6 +123,11 @@ export function apply(ctx: ClientContext): void {
       request => probeConnection(request, t),
       loadCatalog,
     )
+    // The settings namespace outlives this fiber, so its notifications have to be
+    // taken off with the page. Without this, a client hot reload leaves the old
+    // controller listening and every notification reaches a context that no longer
+    // serves the Host (`cannot get required service "remote" in inactive context`).
+    scopeCtx.effect(() => () => { controller.dispose() }, 'dsh-ds-db: settings page reads')
 
     scopeCtx.slots.inject('settings.section', () => scopeCtx.slots.register({
       name: 'settings.section',
