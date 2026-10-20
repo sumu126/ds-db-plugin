@@ -15,9 +15,8 @@
  */
 
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import {
-  Button, IconBrowseOutline16, IconDatabaseOutline16, IconRefreshOutline16, type IconProps,
-} from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, type IconProps } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconBrowseOutline16, IconDatabaseOutline16, IconRefreshOutline16 } from './icons.ts'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { TableNode } from '../contract.ts'

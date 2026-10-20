@@ -693,4 +693,42 @@ console.log('no settings transport: the plugin activates with only its tool rows
 await bare.dispose()
 assert.equal(seats.size, 0, 'and unloads clean')
 
+// The shell's icon set, across both of its spellings.
+//
+// 0.2.x renamed every icon from its pixel size (`IconPlusOutline16`) to its
+// weight (`IconPlusOutlineRegular`). A client bundle resolves the shell's
+// primitives at runtime, so a name the running shell does not serve is
+// `undefined` rather than a load error — and rendering `<undefined />` is React
+// error #130, which blanks the whole surface behind a stack trace that names no
+// export. That is exactly how this plugin's settings page disappeared on the
+// desktop while every other gate stayed green: the page only reached an icon
+// once the host began serving its namespace.
+//
+// This check cannot observe the desktop's shell, so it pins the two properties
+// that keep the failure from being fatal anywhere: the newer spelling is honoured
+// when it is the one served, and a miss yields a component instead of undefined.
+const { resolveIcon } = await import('../src/client/icons.ts')
+const sizeSpelled = () => null
+const weightSpelled = () => null
+assert.equal(
+  resolveIcon({ IconPlusOutline16: sizeSpelled }, 'IconPlusOutline16', 'IconPlusOutlineRegular'),
+  sizeSpelled,
+  'the older size spelling is preferred when the shell serves it',
+)
+assert.equal(
+  resolveIcon({ IconPlusOutlineRegular: weightSpelled }, 'IconPlusOutline16', 'IconPlusOutlineRegular'),
+  weightSpelled,
+  'the newer weight spelling is used when it is the only one the shell serves',
+)
+const absent = resolveIcon({}, 'IconPlusOutline16', 'IconPlusOutlineRegular')
+assert.equal(typeof absent, 'function', 'an icon neither spelling serves is never undefined')
+assert.equal(absent({}), null, 'and draws nothing rather than crashing the slot that renders it')
+
+const iconModule = await import('../src/client/icons.ts')
+const notComponents = Object.entries(iconModule)
+  .filter(([key, value]) => key.startsWith('Icon') && typeof value !== 'function')
+  .map(([key]) => key)
+assert.deepEqual(notComponents, [], 'every icon this plugin imports is a component')
+console.log('icons: both spellings resolve, and a shell miss degrades to an empty icon')
+
 console.log('client check passed')

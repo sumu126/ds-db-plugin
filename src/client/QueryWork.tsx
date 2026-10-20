@@ -11,9 +11,8 @@
  */
 
 import type { ReactNode, RefObject } from 'react'
-import {
-  Button, IconPlayOutline16, IconStopFill16,
-} from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconPlayOutline16, IconStopFill16 } from './icons.ts'
 import type { QueryCell } from '../contract.ts'
 import type { QueryActions, QueryAnswer, QueryState } from './query.ts'
 import type { DbCopy } from './locales.ts'

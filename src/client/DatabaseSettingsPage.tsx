@@ -10,7 +10,8 @@
 
 import { useEffect, useRef } from 'react'
 import clsx from 'clsx'
-import { Button, IconPlusOutline16, IconRefreshOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconPlusOutline16, IconRefreshOutline16 } from './icons.ts'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ConnectionCard, DbDialog, DbFormField, DbPageFace, DbProbe } from './form.ts'
 import { FIELD_INVALID_KEY, dialogValid, editDraftFor, endpointText, fieldInvalid, sharedPasswordRef } from './form.ts'

@@ -12,10 +12,11 @@
  */
 
 import { useEffect, useState, type ReactNode } from 'react'
+import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import {
-  Button, IconChevronDownOutline14, IconChevronRightOutline14, IconCheckOutline16,
+  IconChevronDownOutline14, IconChevronRightOutline14, IconCheckOutline16,
   IconCopyOutline16, IconDataOutline16, IconPlusOutline16, IconSearchOutline16,
-} from '@deepseek-ai/dsh-client-ui-primitives'
+} from './icons.ts'
 import type { ColumnNode, TableNode } from '../contract.ts'
 import type { BrowseActions, BrowseState, OpenDatabase } from './browse.ts'
 import type { DbCopy } from './locales.ts'
