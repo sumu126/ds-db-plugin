@@ -120,7 +120,11 @@ export function DatabaseWorkbenchPanel(props: DatabaseWorkbenchPanelProps): Reac
     area.setSelectionRange(at, at)
   })
 
-  if (!tree.available) return <p className={styles.notice} role="status">{t('unavailable')}</p>
+  // As on the settings page: an outstanding first answer and a document that
+  // serves no namespace for this entry are not the same news.
+  if (!tree.available) {
+    return <p className={styles.notice} role="status">{t(tree.pending ? 'waiting' : 'unavailable')}</p>
+  }
   if (tree.connections.length === 0) return <p className={styles.notice} role="status">{t('browseEmpty')}</p>
 
   // The picker always shows a connection the workbench can address: a snapshot

@@ -86,6 +86,8 @@ export interface OpenDatabase {
 export interface BrowseState {
   /** False until the Host serves this settings namespace. */
   available: boolean
+  /** Whether the Host has not answered yet; see `DatabasePageState.pending`. */
+  pending: boolean
   /** Saved connections, in document order. */
   connections: BrowseConnection[]
   /** Id of the connection being browsed; empty when nothing is saved. */
@@ -225,6 +227,7 @@ export class DatabaseBrowseController {
     const active = value?.activeId ?? ''
     return {
       available: snapshot.status === 'ready',
+      pending: snapshot.status === 'loading',
       connections: (value?.connections ?? []).map(profile => ({
         id: profile.id, name: profile.name, active: profile.id === active,
       })),

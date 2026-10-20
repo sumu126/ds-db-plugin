@@ -21,6 +21,84 @@ import {
 } from './contract.ts'
 
 /**
+ * A live configuration reference, as a generation that serves `.volatile()`
+ * hands one over.
+ *
+ * The generation that introduced `.volatile()` also stopped handing a plugin a
+ * plain value for a marked field: `apply()` receives a stable reference whose
+ * `get()` returns the current snapshot, so a committed write reaches the next
+ * call without a remount. The interface is written out here rather than
+ * imported — this module has to keep loading on a runtime whose Schemastery has
+ * neither the type nor the method.
+ */
+export interface ConfigRef<T> {
+  /** @returns the current immutable snapshot. */
+  get(): T
+}
+
+/**
+ * Whether a schema can be marked volatile at all.
+ * @param schema - a Schemastery schema, from whichever generation is running.
+ * @returns whether the method this module would call is there.
+ */
+function supportsVolatile<S extends object>(schema: S): schema is S & { volatile(): S } {
+  return typeof Reflect.get(schema, 'volatile') === 'function'
+}
+
+/**
+ * Mark one config field live, where the running generation understands it.
+ *
+ * This is the one hard requirement of the 0.2.x settings model: a form projects
+ * **only volatile fields**, and an entry with none is left out of the descriptor
+ * list entirely — the page is then refused rather than shown empty. The older
+ * generation has no such method and needs none: it lets a plugin install a
+ * namespace of its own through `installSection` instead, which is why the same
+ * schema serves both.
+ *
+ * `extra('volatile', true)` is the fallback rather than a no-op, because that is
+ * what `.volatile()` itself is built on there. A generation too old to read the
+ * key still records it, so one schema shape crosses both generations — and this
+ * repository can assert the shape the newer one projects forms from, instead of
+ * only being able to assert it on a host that is not running here.
+ *
+ * Skipping rather than failing matters in the other direction too: `.volatile()`
+ * on a runtime without it throws at import time, which would take the whole
+ * plugin down on the CLI and web deployments the older generation still serves.
+ * @param schema - the field's schema.
+ * @returns the same field, live where that is supported.
+ */
+function volatileField<S extends object>(schema: S): S {
+  if (supportsVolatile(schema)) return schema.volatile()
+  const legacy = schema as S & { extra?(key: string, value: unknown): S }
+  return typeof legacy.extra === 'function' ? legacy.extra('volatile', true) : schema
+}
+
+/**
+ * Whether a received config value is a live reference rather than a plain value.
+ * @param value - one field of the configuration handed to `apply()`.
+ * @returns whether it is a {@link ConfigRef}.
+ */
+function isConfigRef<T>(value: unknown): value is ConfigRef<T> {
+  return typeof value === 'object' && value !== null && typeof Reflect.get(value, 'get') === 'function'
+}
+
+/**
+ * Read one configuration field, whichever way the running generation hands it
+ * over.
+ *
+ * A volatile field arrives as a reference and must be read at the moment it is
+ * used — capturing it once would freeze the composition layer and hide every
+ * later write. Every other field arrives as its plain value. One helper covers
+ * both, so callers name the value they want rather than which generation they
+ * are running on.
+ * @param value - the field as received.
+ * @returns its current value.
+ */
+export function readConfig<T>(value: T | ConfigRef<T>): T {
+  return isConfigRef<T>(value) ? value.get() : value as T
+}
+
+/**
  * Connection values a deployment that configures nothing gets.
  *
  * The host is the one guess that is never wrong about a remote server; the port
@@ -195,8 +273,14 @@ export const Config: z<Config> = z.object({
   // No default: an absent list and an empty one both mean the flat fields above
   // describe the single connection, and the presence of a list is what replaces
   // them.
-  connections: z.array(ProfileSchema),
-  activeId: z.string().default(''),
+  //
+  // These two fields are the whole section the settings page edits, so they are
+  // the whole form: a generation that projects only volatile fields serves a
+  // page for this entry because of these two calls and for no other reason. The
+  // flat fields above stay ordinary — they are a deployment's composition, not
+  // something the page writes.
+  connections: volatileField(z.array(ProfileSchema)),
+  activeId: volatileField(z.string().default('')),
   // Empty means "the packages this plugin knows about": the entry point falls
   // back to its own list, so `dialect-catalog` stays out of this module and no
   // import cycle forms between the schema and the hint list.
@@ -228,16 +312,23 @@ function flatConnection(config: Config): ConnectionProfile {
  * The settings section a deployment that mounts no settings provider still
  * runs on: the preprovisioned connections, else the one the flat fields
  * describe, with the active id the configuration names or the first connection.
- * @param config - the validated composition configuration.
- * @returns the complete section the namespace resolves to.
+ * @param config - the validated composition configuration, whose two section
+ *   fields may arrive as live references.
+ * @returns the complete section the namespace resolves to, as of this call.
  */
 export function compositionEntry(config: Config): DatabaseSettings {
-  const connections = config.connections !== undefined && config.connections.length > 0
-    ? config.connections
+  // Read rather than capture. On a generation that hands these over as live
+  // references this function has to be called again to see a committed write —
+  // which is why every caller passes a thunk instead of one resolved section.
+  // The list is copied because a reference's snapshot is frozen: a caller that
+  // sorts or annotates the section must not be handed the host's own value.
+  const declared = readConfig(config.connections)
+  const connections = declared !== undefined && declared.length > 0
+    ? [...declared]
     : [flatConnection(config)]
   const first = connections[0]
   if (first === undefined) return { connections: [], activeId: '' }
-  const requested = config.activeId
+  const requested = readConfig(config.activeId)
   const activeId = requested !== undefined && connections.some(profile => profile.id === requested)
     ? requested
     : first.id
@@ -245,7 +336,13 @@ export function compositionEntry(config: Config): DatabaseSettings {
 }
 
 /**
- * The User Settings section the database page edits.
+ * The User Settings section the database page edits, as the generation that
+ * installs its own namespace wants it.
+ *
+ * From 0.2.x this schema is not what the page renders: the form is projected
+ * from {@link Config}'s own volatile fields instead, and this constant is only
+ * the seed handed to `installSection` on the older generation. It stays because
+ * that path is still served, not because anything reads it here.
  *
  * Both keys take a default, because a user layer holds only what the user
  * changed: a document that carries connections but no `activeId` is normal, and

@@ -94,6 +94,15 @@ export type DialectFieldDraft = DialectDescriptor['configFields'][number]
 export interface DatabasePageState {
   /** False until the Host serves this settings namespace. */
   available: boolean
+  /**
+   * Whether the Host has not answered yet.
+   *
+   * `available` is false both while the first answer is outstanding and after an
+   * answer that carries no such namespace. Those are different situations for
+   * the reader — one of them resolves itself — so the page says different words
+   * for them instead of reporting a missing namespace that may yet arrive.
+   */
+  pending: boolean
   /** Whether the Host settings document accepts writes. */
   writable: boolean
   /** Whether a save is crossing the wire. */
@@ -528,6 +537,7 @@ export class DatabaseSettingsController {
     const connections = value?.connections ?? []
     return {
       available: snapshot.status === 'ready',
+      pending: snapshot.status === 'loading',
       writable: snapshot.writable,
       saving: this.saving,
       failed: this.failed,

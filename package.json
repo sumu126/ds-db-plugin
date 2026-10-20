@@ -65,6 +65,7 @@
     "verify:loader": "node --import tsx/esm tests/loader-smoke.mjs",
     "verify:cards": "node --import tsx/esm scripts/verify-cards.mjs",
     "verify:client": "node --import tsx/esm scripts/verify-client.mjs",
+    "verify:forms": "node --import tsx/esm scripts/verify-forms.mts",
     "card:live": "node --experimental-strip-types scripts/verify-live.mjs",
     "db:live": "node --import tsx/esm scripts/db-live.mjs"
   },

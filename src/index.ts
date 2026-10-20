@@ -78,35 +78,53 @@ export function apply(ctx: Context, config: Config): void {
     rows: config.cardMaxRows ?? CARD_BUDGET.rows,
     items: config.cardMaxItems ?? CARD_BUDGET.items,
   }
-  // The settings source is a thunk, not a snapshot: the provider hands it over
-  // once, and every operation reads through it so a committed change (or a
-  // provider detach) reaches the next tool call.
+  // The settings source is a thunk, not a snapshot: every operation reads
+  // through it so a committed change (or a provider detach) reaches the next
+  // tool call.
+  //
+  // Which thunk depends on the generation. Where a provider installs a section
+  // it hands a source over below; where the entry's own Config *is* the section,
+  // nothing is handed over at all and re-reading the composition is what keeps
+  // the reads live — `compositionEntry` goes through `readConfig`, and those two
+  // fields arrive as references that move when the page writes.
   //
   // A section that resolves to no connection falls back to the composition
   // entry, because a stored section holds only what the user changed: a
   // document carrying the schema's empty `connections` would otherwise leave
   // every tool with nothing to address, even though the deployment configured a
   // connection in `cordis.yml`.
-  let readSettings: () => DatabaseSettings = () => entry
+  let readSettings: () => DatabaseSettings = () => compositionEntry(config)
   const withCompositionFallback = (source: () => DatabaseSettings): (() => DatabaseSettings) =>
     () => {
       const resolved = source()
-      return resolved.connections.length > 0 ? resolved : entry
+      return resolved.connections.length > 0 ? resolved : compositionEntry(config)
     }
 
   // The settings provider is optional: without one the composition entry is
   // the whole configuration, and the configuration page reports the namespace
   // as unavailable rather than editing a section nobody serves.
   //
-  // Installing a section is also generation-dependent: 0.1.6 and earlier let a
-  // plugin install its own namespace, while 0.1.7 and later project every
-  // entry's own Config into a form and have no such seam. The desktop app ships
-  // the later generation, where this call would throw for a method that is not
-  // there — so it is made only when the service still serves it. There, the
-  // schema declared beside this plugin is already the page, and the Loader hands
-  // the saved values in as `config`.
+  // Two generation-dependent seams live here, and they are not the same seam:
+  //
+  // - `configure({ auto })` exists from 0.2.x and is how a plugin that ships its
+  //   own page opts out of a generated one. Only that generation generates
+  //   pages, and only it has the method, so it is asked only when it is there.
+  // - `installSection` is the *older* generation's seam: 0.1.6 and earlier let a
+  //   plugin install a namespace of its own, while 0.1.7 and later project every
+  //   entry's own Config into a form and have none. There, the schema declared
+  //   beside this plugin is already the page, and the Loader hands the saved
+  //   values in as `config`.
+  //
+  // Both are optional calls rather than required services for the reason the
+  // client half records: an entry waiting on a service a shell does not serve is
+  // reported as a startup failure, so a shell missing one of these must lose the
+  // surface, not the app.
   ctx.inject(['settings'], (settingsCtx) => {
-    const installer = settingsCtx.settings as typeof settingsCtx.settings & {
+    const service = settingsCtx.settings as typeof settingsCtx.settings & {
+      // The owner is this plugin's own fiber — the instance the policy describes.
+      // Named through `ctx.fiber` rather than imported so this file keeps
+      // compiling against either generation's Cordis.
+      configure?: (presentation: { auto?: boolean }, owner?: typeof ctx.fiber) => (() => void) | undefined
       installSection?: (
         owner: Context,
         ns: string,
@@ -115,7 +133,19 @@ export function apply(ctx: Context, config: Config): void {
         hooks: { setSource: (source: () => DatabaseSettings) => void, onChange: () => void },
       ) => void
     }
-    installer.installSection?.(ctx, DB_SETTINGS_NAMESPACE, DatabaseSettingsSchema, entry, {
+
+    // The policy belongs to this plugin's fiber, not to the inject child's
+    // context: the child's context is the *consumer's*, and a policy filed under
+    // it would describe the wrong instance. Registered as an effect so a
+    // replaced Settings service does not leave a stale one behind.
+    if (typeof service.configure === 'function') {
+      ctx.effect(
+        () => service.configure?.({ auto: false }, ctx.fiber) ?? (() => {}),
+        'ds-db: own settings page',
+      )
+    }
+
+    service.installSection?.(ctx, DB_SETTINGS_NAMESPACE, DatabaseSettingsSchema, entry, {
       setSource: (source) => { readSettings = withCompositionFallback(source) },
       // Nothing is derived from the source besides the reads above.
       onChange: () => {},

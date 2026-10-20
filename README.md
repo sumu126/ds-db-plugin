@@ -414,6 +414,7 @@ pnpm run verify:host && pnpm run verify:cards
 | `typecheck` / `test`（24 例） | 兄弟 `../deepseek-harness` | ✅ |
 | `verify:host` / `verify:cards` | 同上 | ✅ |
 | `verify:settings` | 同上；读**你自己**的 `~/.dsh/settings.yaml` | ✅（空文档时回落到工具自身计数，不会假红） |
+| `verify:forms` | 同上 | ✅ |
 | `verify:loader` | 同上；自带一次性 `DSH_HOME` | ✅ |
 | `card:live` | **你自己的会话日志路径** | ❌ 不属于上手路径 |
 | `db:live` | **你自己的连接名 + 凭据** | ❌ 同上 |
@@ -433,6 +434,7 @@ npm run verify:settings   # 挂真实设置服务：工具读到的是用户保�
 npm run verify:loader     # 经 Loader + 真实 cordis.yml 组装：加载、注入、卸载
 npm run verify:cards      # 两端往返：Host 写的会话卡片，客户端读回同一张
 npm run verify:client     # 真的跑一遍浏览器半边：apply 注册了什么、卸载是否收干净
+npm run verify:forms      # 0.2.x 投影出哪些字段（空则桌面端没有设置页），以及引用是否每次重读
 npm run build             # 类型声明 + 核心 + 浏览器半边 + 每个方言包
 npm run overlay           # 生成三个 overlay：.dev/cordis.yml、.dev/built.yml、.dev/install-probe.yml
 ```
@@ -454,6 +456,7 @@ pnpm dsh --profile web --patch <插件目录>/.dev/cordis.yml --port 3099 --no-o
 | `verify:loader` | 真实 Loader + 一次性 `DSH_HOME` 的 `cordis.yml` | 组合本身：行能否解析、注入是否满足、**插件行 fiber 卸载后工具消失而注册表仍在** |
 | `verify:cards` | Host + **浏览器半边**的卡片模型（Node 即可，无 DOM） | 两端往返：Host 写的元数据，客户端读回同一张卡片；畸形元数据一律回退 |
 | `verify:client` | **浏览器半边的 `apply`**（Node 双替掉它 inject 的五个服务） | 注册面本身：两份字典、`settings.section` 与四个 `tool.call.toolview` 席位、注入面、以及**卸载后是否收干净**（HMR 的前提） |
+| `verify:forms` | 只挂 `src/settings.ts` 的 `Config`，不挂任何服务 | **设置页的存在条件**：0.2.x 只投影 volatile 字段，一个都没有时 `settings.describe()` 会把整个条目丢掉（页面被拒，而不是显示空表单）；以及 `connections` / `activeId` 到达时是活引用，**每次读**才看得见用户保存的改动 |
 
 另有两个**人工回归工具**，故意不叫 `verify:`（不进 gate、不进 CI）：
 

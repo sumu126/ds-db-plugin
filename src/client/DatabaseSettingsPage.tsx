@@ -338,7 +338,7 @@ function FormDialog(props: {
 /**
  * Render the database connections page.
  * @param props - framework seats for the section, the page snapshot, and its actions.
- * @returns the page, or the unavailable notice while the host serves no namespace.
+ * @returns the page, or the notice for a namespace the host has not answered for.
  */
 export function DatabaseSettingsPage(props: DatabaseSettingsPageProps) {
   const { t } = props
@@ -347,7 +347,12 @@ export function DatabaseSettingsPage(props: DatabaseSettingsPageProps) {
   close.current = props.closeDialog
   useEffect(() => () => { close.current() }, [])
 
-  if (!state.available) return <p className={styles.unavailable} role="status">{t('unavailable')}</p>
+  // Two different situations, two different sentences: a first answer still
+  // outstanding resolves itself, while a document that carries no namespace for
+  // this entry is the deployment's shape and will not change on its own.
+  if (!state.available) {
+    return <p className={styles.unavailable} role="status">{t(state.pending ? 'waiting' : 'unavailable')}</p>
+  }
   const dialog = state.dialog
   return (
     <section className={styles.page}>
